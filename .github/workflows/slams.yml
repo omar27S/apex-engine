@@ -83,8 +83,8 @@ jobs:
 
       - name: Fuse slices into ONE certificate (R67, fail-closed)
         run: |
-          python -m tools.factory.fuse_slices --dir slices \
-            --count "$SLICES" --seed 0 --pairs "$PAIRS" \
+          python -m tools.factory.fuse_slices --config configs/burst.json \
+            --dir slices --count "$SLICES" --pairs "$PAIRS" \
             --head "${{ github.sha }}" --cert-dir certificates \
             --out fused_report.json
           cat fused_report.json

@@ -1,0 +1,14 @@
+{
+  "job": "turbo-burst",
+  "data": "data/history",
+  "pairs": "EURUSD,GBPUSD,USDJPY,EURGBP,AUDJPY,CADJPY,NZDJPY,EURJPY",
+  "count": 4,
+  "population": 200,
+  "generations": 2,
+  "elite": 30,
+  "min_trades": 30,
+  "rows": 20000,
+  "seed": 0,
+  "slice_salt": "turbo-e1",
+  "island": "turbo"
+}

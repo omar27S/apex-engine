@@ -1,0 +1,102 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# SLAMS — the public turbo's sliced burst (Phase 7f, R67/R75).
+#
+# Runs on the PUBLIC repo (free runner minutes). Splits the pair universe into
+# disjoint, deterministic slices, runs them in parallel within ONE job, fuses the
+# slice leaderboards, and signs ONE sliced_tournament certificate bound to the
+# running commit. Build Mode: one bounded batch, no server, no scheduler.
+#
+# Budget law (R75): ≤20 concurrent jobs, ≤3 bursts/day. The job refuses more
+# slices than the cap; the split engine enforces it again, fail-closed.
+#
+# NO PRIVATE DATA: the burst runs over a deterministic SYNTHETIC tape generated
+# in-job. This proves the sliced pipeline; it never touches the real tapes (those
+# live only in the private vault).
+# ═══════════════════════════════════════════════════════════════════════════
+name: slams
+
+on:
+  workflow_dispatch:
+    inputs:
+      slices:
+        description: "number of slices (<= TURBO_BUDGET.max_concurrent_jobs)"
+        required: false
+        default: "4"
+      pairs:
+        description: "pair universe (comma-separated)"
+        required: false
+        default: "EURUSD,GBPUSD,USDJPY,EURGBP,AUDJPY,CADJPY,NZDJPY,EURJPY"
+      rows:
+        description: "synthetic tape rows per pair"
+        required: false
+        default: "30000"
+  # The fire button: push to this branch to start a burst with no API token.
+  push:
+    branches: [slams]
+
+permissions:
+  contents: read
+
+jobs:
+  slam:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SLICES: ${{ github.event.inputs.slices || '4' }}
+      PAIRS: ${{ github.event.inputs.pairs || 'EURUSD,GBPUSD,USDJPY,EURGBP,AUDJPY,CADJPY,NZDJPY,EURJPY' }}
+      ROWS: ${{ github.event.inputs.rows || '30000' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install engine dependencies
+        run: pip install numpy pandas pyarrow
+
+      - name: Generate the deterministic synthetic tape (no private data)
+        run: python -m tools.synthetic_tape --out data/history --pairs "$PAIRS" --rows "$ROWS"
+
+      - name: R75 budget gate (fail-closed)
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, ".")
+          from app.factory import budget
+          n = int(os.environ["SLICES"])
+          cap = budget.TURBO_BUDGET.max_concurrent_jobs
+          per_day = budget.TURBO_BUDGET.max_bursts_per_day
+          assert n <= cap, f"R75: {n} slices exceeds cap {cap}"
+          print(f"R75 ok: slices={n} <= cap={cap}; max_bursts_per_day={per_day}")
+          PY
+
+      - name: Run the sliced burst
+        run: |
+          python -m tools.factory.split_engine \
+            --pairs "$PAIRS" --count "$SLICES" --jobs "$SLICES" \
+            --rows "$ROWS" --head "${{ github.sha }}" \
+            --artifacts-dir slices --out burst_report.json
+          cat burst_report.json
+
+      - name: Fuse slices into ONE certificate (R67, fail-closed)
+        run: |
+          python -m tools.factory.fuse_slices --dir slices \
+            --count "$SLICES" --seed 0 --pairs "$PAIRS" \
+            --head "${{ github.sha }}" --cert-dir certificates \
+            --out fused_report.json
+          cat fused_report.json
+
+      - name: Upload the burst artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slam-${{ github.run_id }}
+          path: |
+            burst_report.json
+            fused_report.json
+            slices/*.json
+            certificates/*.json
+          if-no-files-found: warn

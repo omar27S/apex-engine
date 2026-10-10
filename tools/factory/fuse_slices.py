@@ -46,12 +46,19 @@ def _read_artifacts(directory: Path) -> dict[int, dict]:
 
 
 def main(argv=None) -> int:
+    cfg = {}
+    if "--config" in (argv or sys.argv):
+        i = (argv or sys.argv).index("--config")
+        cfg = json.loads(Path((argv or sys.argv)[i + 1]).read_text())
+
     ap = argparse.ArgumentParser(description="Phase 7e slice fusion (R67)")
     ap.add_argument("--dir", required=True)
+    ap.add_argument("--config", default=None,
+                    help="share the burst config so salt/seed/pairs match exactly")
     ap.add_argument("--count", type=int, required=True)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=int(cfg.get("seed", 0)))
     ap.add_argument("--pairs", required=True)
-    ap.add_argument("--slice-salt", default="")
+    ap.add_argument("--slice-salt", default=cfg.get("slice_salt", ""))
     ap.add_argument("--cert-dir", default="certificates")
     ap.add_argument("--head", default=None)
     ap.add_argument("--out", default="fused_report.json")

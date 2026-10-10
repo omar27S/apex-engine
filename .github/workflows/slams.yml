@@ -75,7 +75,7 @@ jobs:
 
       - name: Run the sliced burst
         run: |
-          python -m tools.factory.split_engine \
+          python -m tools.factory.split_engine --config configs/burst.json \
             --pairs "$PAIRS" --count "$SLICES" --jobs "$SLICES" \
             --rows "$ROWS" --head "${{ github.sha }}" \
             --artifacts-dir slices --out burst_report.json

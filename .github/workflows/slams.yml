@@ -29,7 +29,7 @@ on:
       rows:
         description: "synthetic tape rows per pair"
         required: false
-        default: "30000"
+        default: "8000"
   # The fire button: push to this branch to start a burst with no API token.
   push:
     branches: [slams]
@@ -44,7 +44,7 @@ jobs:
     env:
       SLICES: ${{ github.event.inputs.slices || '4' }}
       PAIRS: ${{ github.event.inputs.pairs || 'EURUSD,GBPUSD,USDJPY,EURGBP,AUDJPY,CADJPY,NZDJPY,EURJPY' }}
-      ROWS: ${{ github.event.inputs.rows || '30000' }}
+      ROWS: ${{ github.event.inputs.rows || '8000' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

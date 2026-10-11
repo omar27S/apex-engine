@@ -376,8 +376,23 @@ def chain_next(directory: str | Path = CERT_DIR) -> tuple[int, str]:
     """The ``(chain_index, prev_hash)`` a NEW certificate should carry (R44).
 
     Reads the existing chain (empty -> genesis at index 0 with an empty prev_hash).
+
+    DEBT-028 hardening: the write path no longer *trusts* directory ordering. Two
+    certificates sharing a ``chain_index`` (a colliding name or a double write) are
+    rejected fail-closed, and a gap in the 0..N-1 sequence is rejected too — so a
+    new certificate can never silently branch or skip the chain.
     """
     chain = load_chain(directory)
     if not chain:
         return 0, ""
+    indices = [int(c.get("chain_index", 0)) for c in chain]
+    if len(set(indices)) != len(indices):
+        dupes = sorted({i for i in indices if indices.count(i) > 1})
+        raise CertificateError(
+            f"chain_next: duplicate chain_index {dupes} in {Path(directory)} — "
+            "refusing to append onto an ambiguous chain (DEBT-028)")
+    if indices != list(range(len(indices))):
+        raise CertificateError(
+            f"chain_next: chain_index is not contiguous 0..N-1 in {Path(directory)} "
+            f"(got {indices}) — refusing to append onto a broken chain (DEBT-028)")
     return len(chain), str(chain[-1].get("signature", ""))

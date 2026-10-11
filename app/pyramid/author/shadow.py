@@ -71,7 +71,7 @@ def _namespace() -> dict:
 
 
 def _arrays(frame: pd.DataFrame):
-    return {
+    cols = {
         "close": frame["close"].to_numpy(dtype="float64"),
         "high": frame["high"].to_numpy(dtype="float64"),
         "low": frame["low"].to_numpy(dtype="float64"),
@@ -79,6 +79,9 @@ def _arrays(frame: pd.DataFrame):
         "volume": frame["volume"].to_numpy(dtype="float64"),
         "ts": frame["ts"].to_numpy(dtype="int64"),
     }
+    if "dxy" in frame.columns:
+        cols["_dxy"] = frame["dxy"].to_numpy(dtype="float64")
+    return cols
 
 
 def evaluate_tree(program: g.Program, frame: pd.DataFrame, genes: dict | None = None
@@ -87,7 +90,18 @@ def evaluate_tree(program: g.Program, frame: pd.DataFrame, genes: dict | None = 
     ns = _namespace()
     long_expr, short_expr, concept = g.emit_expressions(program)
     ctx = _arrays(frame)
-    ctx["_GENES"] = dict(genes or {})
+    genes = dict(genes or {})
+    # Mirror the body's R81/R82 context so the shadow reads the SAME pip/pair/dxy.
+    _ctx = ns.get("_CTX")
+    if _ctx is not None:
+        try:
+            _ctx["pip"] = float(genes.get("__pip__", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            _ctx["pip"] = 0.0
+        _ctx["pair"] = str(genes.get("__pair__", ""))
+        _ctx["dxy"] = ctx.get("_dxy")
+    ctx["_GENES"] = genes
+    ctx.update(ns)
     long_raw = np.asarray(eval(long_expr, ns, ctx), dtype=bool)  # noqa: S307 - sealed expression
     short_raw = np.asarray(eval(short_expr, ns, ctx), dtype=bool)  # noqa: S307 - sealed expression
     return ShadowResult(long=long_raw, short=short_raw, concept=concept)

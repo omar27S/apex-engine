@@ -133,7 +133,12 @@ GENE_BOUNDS: tuple[GeneBound, ...] = (
     GeneBound("max_bars_hold", 4, 500, True),
     GeneBound("cooldown_bars", 0, 100, True),
     # regime / confluence / alignment (Phase 2.2a gate stack)
-    GeneBound("min_atr_pips", 0.0, 50.0, False),
+    # R84 (Phase 7h) — the ATR floor was calibrated DOWN from 50.0. On the M15 tapes
+    # a normal bar is ~2-11 pips of ATR (p90 <= ~18 pips across the majors); a floor
+    # drawn uniformly up to 50 pips rejects ~90% of random genomes as "no trades".
+    # 20 pips keeps the gate meaningful (it still rejects genuinely quiet bars) while
+    # admitting the tradeable range. The old value remains the honest counterfactual.
+    GeneBound("min_atr_pips", 0.0, 20.0, False),
     GeneBound("max_spread_pips", 0.1, 10.0, False),
     GeneBound("session_id", 0, 3, True),
     GeneBound("trend_align", 0, 2, True),        # 0=off, 1=with D1 trend, 2=against

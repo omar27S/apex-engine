@@ -37,6 +37,124 @@ PESSIMISTIC_FILL = True  # backtest books the worst intrabar case
 # GATED-DEAD (a computed condition), never silently dropped.
 MUTE_RAW_THRESHOLD = 50
 
+# R85 — THE GROSS-TO-FRICTION GATE (Phase 7i). A candidate must earn its own
+# friction many times over before it is worth expensive rounds. The gate runs at
+# STAIRCASE ROUND 1 (the cheap screen) and requires the GROSS edge to clear the
+# conservative friction multiple:
+#
+#     gross_r >= FRICTION_MULTIPLE * |friction_r|,   friction_r = gross_r - net_r
+#
+# FRICTION_MULTIPLE is sealed at 3.0 — three times the friction is the margin a
+# candidate must plausibly pay. It is a floor on EVIDENCE, not a promise of edge.
+FRICTION_MULTIPLE = 3.0
+
+
+class GrossFrictionVerdict(NamedTuple):
+    """R85 — the gross-to-friction ruling (``ok`` is the only actionable field)."""
+
+    ok: bool
+    gross_r: float
+    friction_r: float
+    multiple: float  # gross_r / |friction_r| (inf when friction is zero)
+    reason: str
+
+
+def gross_to_friction_verdict(gross_r: float, net_r: float) -> GrossFrictionVerdict:
+    """R85 — approve iff ``gross_r >= FRICTION_MULTIPLE * |friction_r|``.
+
+    ``friction_r = gross_r - net_r`` is the cost the market charged (>= 0 in the
+    honest, cost-on path). Fail-closed:
+
+    * a non-positive gross edge is rejected (nothing to pay friction with);
+    * zero friction (a diagnostic gross run, or a frictionless slice) is rejected,
+      because the gate must not pass on an un-invoiced evaluation — with no
+      friction it carries no evidence that the edge survives it.
+
+    A gross-rich, friction-poor body (gross 1000, net -2000) is therefore rejected
+    at round 1, before it can cost minutes in the expensive rounds.
+    """
+    g = float(gross_r)
+    n = float(net_r)
+    friction = g - n
+    if g <= 0.0:
+        return GrossFrictionVerdict(False, g, friction, 0.0,
+                                    "non-positive gross edge — nothing to pay friction with")
+    if friction <= 0.0:
+        return GrossFrictionVerdict(False, g, friction, float("inf"),
+                                    "zero friction recorded — un-invoiced evaluation refused")
+    multiple = g / friction
+    if multiple < FRICTION_MULTIPLE:
+        return GrossFrictionVerdict(
+            False, g, friction, multiple,
+            f"gross/friction {multiple:.2f} < sealed multiple {FRICTION_MULTIPLE:g}")
+    return GrossFrictionVerdict(
+        True, g, friction, multiple,
+        f"gross/friction {multiple:.2f} >= sealed multiple {FRICTION_MULTIPLE:g}")
+
+
+def friction_breakdown(gross_r: float, net_r: float) -> dict:
+    """R85 (Phase 7j) — the gate's arithmetic, stated per body so the search can
+    SEE how far a candidate sits from the bar.
+
+    ``paid_multiple`` is the gross/friction ratio the body ACTUALLY paid
+    (``gross_r / |friction_r|``; ``inf`` when friction is zero). ``breakeven_ratio``
+    is the gross edge needed per unit of friction to clear the sealed multiple
+    (always ``FRICTION_MULTIPLE``) — the bar itself. ``distance`` is
+    ``paid_multiple - FRICTION_MULTIPLE`` (negative = short of the bar; positive =
+    clears it). ``gap_to_bar_r`` is the extra gross R the body would need ON THIS
+    FRICTION to reach the bar (0 when it already clears; ``inf`` when nonsensical).
+    Reports only — the ruling is :func:`gross_to_friction_verdict`.
+    """
+    g = float(gross_r)
+    n = float(net_r)
+    friction = g - n
+    v = gross_to_friction_verdict(g, n)
+    paid = v.multiple
+    if friction > 0.0 and g > 0.0:
+        distance = paid - FRICTION_MULTIPLE
+        gap_r = max(0.0, FRICTION_MULTIPLE * friction - g)
+    else:
+        distance = float("-inf") if g <= 0.0 else float("inf")
+        gap_r = float("inf")
+    return {
+        "gross_r": round(g, 4),
+        "net_r": round(n, 4),
+        "friction_r": round(friction, 4),
+        "paid_multiple": (None if paid == float("inf") else round(paid, 4)),
+        "breakeven_ratio": FRICTION_MULTIPLE,
+        "distance_from_bar": (None if distance in (float("inf"), float("-inf"))
+                              else round(distance, 4)),
+        "gap_to_bar_r": (None if gap_r == float("inf") else round(gap_r, 4)),
+        "gate_ok": bool(v.ok),
+        "reason": v.reason,
+    }
+
+
+# R86 — THE MIRROR-WINDOW RULE (Phase 7i). Every evaluation report that carries a
+# verdict carries BOTH windows: the SHORT-WINDOW diagnostic (the last
+# MIRROR_SHORT_WINDOW_ROWS M15 bars — the ~20k tail the author sessions once used)
+# and the FULL-TAPE verdict. "Survivor" is defined ONLY as full-tape-positive; the
+# short window exists so a tape-window artifact (a body alive on the tail, dead on
+# the full tape — e.g. the Baptism's friday_fade) can never be mistaken for an edge.
+MIRROR_SHORT_WINDOW_ROWS = 20000
+
+
+def mirror_window_verdict(full_positive: bool, short_positive: bool) -> dict:
+    """R86 — label a body's two windows; FULL-TAPE decides "survivor", not the tail.
+
+    Returns a plain dict so any report can embed it. ``survivor`` is True iff the
+    FULL tape is positive. ``window_artifact`` is True when the short diagnostic is
+    positive but the full tape is not — the exact failure mode R85/R86 exist to catch.
+    """
+    return {
+        "full_tape_positive": bool(full_positive),
+        "short_window_positive": bool(short_positive),
+        "survivor": bool(full_positive),
+        "window_artifact": bool(short_positive and not full_positive),
+        "definition": "survivor == full-tape-positive (R86)",
+    }
+
+
 
 # ---------------------------------------------------------------------------
 # Verdicts (plain data carriers; ``ok`` is the only field a caller may act on).

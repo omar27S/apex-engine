@@ -194,6 +194,7 @@ def judge_body(
     eval_config=None,
     causality_check: bool = True,
     program=None,
+    major_frames: dict | None = None,
 ) -> BodyVerdict:
     """Run the R31 gate, the R30 gates, and (R35) the shadow-equivalence gate.
 
@@ -201,6 +202,11 @@ def judge_body(
     the body's sandbox output must EQUAL its native shadow evaluation — closing
     the 4b challenge line for grammar bodies. Reference/escape bodies are judged
     without the shadow gate (there is no tree to compare against).
+
+    When ``major_frames`` is supplied (R82), a causal read-only USD-index proxy is
+    built from those majors and injected as a ``dxy`` column on the execution
+    frame, and the pair/pip travel in the body's gene env — so the calendar,
+    price-level and cross-instrument grammar nodes have what they need.
     """
     from app.core import data as data_mod
     from app.quant import evaluator as ev
@@ -219,6 +225,13 @@ def judge_body(
     m15 = data_mod.validate(m15)
     F = frames_mod.build_frames(m15, pair, pip)
     exec_frame = F.exec[["ts", "open", "high", "low", "close", "volume"]].copy()
+    if major_frames:
+        from app.pyramid.author import sensors as sensors_mod
+
+        exec_frame["dxy"] = sensors_mod.dxy_proxy_series(
+            exec_frame["ts"].to_numpy(), major_frames)
+    # The body's gene env carries the pair metadata the R81/R82 nodes read.
+    genes = {**dict(genes), "__pip__": float(pip), "__pair__": str(pair)}
 
     # --- GATE 1: isolated execution -------------------------------------------
     try:
@@ -270,6 +283,13 @@ def judge_body(
             mutated = mutate(m15, t_ts)
             Fm = frames_mod.build_frames(mutated, pair, pip)
             exec_m = Fm.exec[["ts", "open", "high", "low", "close", "volume"]].copy()
+            if major_frames:
+                from app.pyramid.author import sensors as sensors_mod
+
+                # The proxy is rebuilt from the UNMUTATED majors, so it is
+                # invariant under any mutation of the traded pair's future.
+                exec_m["dxy"] = sensors_mod.dxy_proxy_series(
+                    exec_m["ts"].to_numpy(), major_frames)
             try:
                 runm = run_body(body_source, exec_m, genes=genes, config=config)
             except SandboxDeath as d:
@@ -295,7 +315,8 @@ def judge_body(
         gates["causality"] = {"ok": True, "t_ts": t_ts, "modes": mode_results}
 
     # --- GATE 5: the honest engine ---------------------------------------------
-    geometry = {k: v for k, v in dict(genes).items() if k != "family"}
+    geometry = {k: v for k, v in dict(genes).items()
+                if k != "family" and not str(k).startswith("__")}
     geometry["family"] = _GEOMETRY_FAMILY
     try:
         genome = StrategyGenome.from_dict(geometry)

@@ -35,6 +35,7 @@ __all__ = [
     "Hypothesis",
     "IntuitionResult",
     "grounded_hypotheses",
+    "patience_hypotheses",
     "translate_intuition",
     "novelty_hypothesis",
     "fingerprint",
@@ -114,6 +115,10 @@ def _macd(f=12, s=26, sig=9):
     return g.node("macd_hist", (int(f), int(s), int(sig)))
 
 
+def _absret(period: int = 60):
+    return g.node("absret_pct", (int(period),))
+
+
 def _z(period: int = 20):
     return g.node("zscore", (int(period),))
 
@@ -142,6 +147,10 @@ def _or(a, b):
     return g.node("or", (), (a, b))
 
 
+def _not(a):
+    return g.node("not", (), (a,))
+
+
 def _cross(a, b, above=True):
     return g.node("crosses_above" if above else "crosses_below", (), (a, b))
 
@@ -154,9 +163,67 @@ def _killzone(start: int, end: int):
     return g.node("killzone", (int(start), int(end)))
 
 
+# --- R81/R82/R83 (Phase 7h) builders for the newly expressible hunches ------
+def _dow(dow: int):
+    return g.node("day_of_week", (int(dow),))
+
+
+def _nth_weekday(n: int, dow: int):
+    return g.node("nth_weekday", (int(n), int(dow)))
+
+
+def _dom(lo: int, hi: int):
+    return g.node("day_of_month", (int(lo), int(hi)))
+
+
+def _jpy_holiday(before: int, after: int):
+    return g.node("jpy_holiday_window", (int(before), int(after)))
+
+
+def _round_hit(step: int, tol: float):
+    return g.node("round_number_hit", (int(step), float(tol)))
+
+
+def _dist_round(step: int):
+    return g.node("dist_round", (int(step),))
+
+
+def _gap_open(min_pips: float):
+    return g.node("gap_open", (float(min_pips),))
+
+
+def _prior_day_dir():
+    return g.node("prior_day_dir")
+
+
+def _dxy_corr(window: int):
+    return g.node("dxy_corr", (int(window),))
+
+
+def _dxy_lag_align(lag: int):
+    return g.node("dxy_lag_align", (int(lag),))
+
+
 def _concept(tag: str) -> str:
     """A stable concept tag; the session appends the body hash when storing."""
     return f"hyp:{tag}"
+
+
+# --- R87 (Phase 7j) PATIENCE builders — the sniper primitives --------------
+def _min_gap(bars: int, child):
+    return g.node("min_gap_bars", (int(bars),), (child,))
+
+
+def _quiet(bars: int, window: int, quiet: float):
+    return g.node("n_quiet_bars", (int(bars), int(window), float(quiet)))
+
+
+def _atr_quartile(window: int, bucket: float = 0.75):
+    return g.node("atr_quartile", (int(window), float(bucket)))
+
+
+def _bars_since(window: int):
+    return g.node("bars_since_range", (int(window),))
 
 
 # ---------------------------------------------------------------------------
@@ -339,16 +406,187 @@ def grounded_hypotheses(inputs: HypothesisInputs, *, n: int = 8) -> list[Hypothe
 
 
 # ---------------------------------------------------------------------------
+# R87 (Phase 7j) — THE PATIENT SNIPER HYPOTHESES.
+# ---------------------------------------------------------------------------
+# The dense shooters died at the cashier: many entries, friction compounding per
+# entry into thousands of R. These bodies invert the profile — they fire rarely,
+# wait for calm, and gate on the volatile realm the tape rewards. Each is built
+# ONLY from the R87 patience nodes plus the existing families, and each is a
+# concrete parameterisation of one of the directive's patience mandates.
+def _patience_specs() -> list[tuple[str, str, g.Node, g.Node, str]]:
+    """(name, mandate, long_tree, short_tree, grounding)."""
+    return [
+        # (a) multi-day hold + structural target: enter a wide-stop regime late in
+        #     a coiled range, hold for the structural move (max_bars_hold is wide
+        #     in the session's carrier — this node expresses the ENTRY patience).
+        ("p_quiet_breakout", "n-quiet-bars-then-event",
+         _and(_min_gap(48, _quiet(24, 96, 0.8)),
+              _cmp(">", _donchian(40), _const(0.9))),
+         _and(_min_gap(48, _quiet(24, 96, 0.8)),
+              _cmp("<", _donchian(40), _const(0.1))),
+         "coiled >=24 calm bars, then a range breakout (wide stops will breathe)."),
+        # (c) regime-gated firing: trade ONLY the top-quartile ATR realm.
+        ("p_vol_realm_trend", "regime-gated (top ATR quartile)",
+         _and(_atr_quartile(160, 0.75), _cmp(">", _macd(), _const(0.0))),
+         _and(_atr_quartile(160, 0.75), _cmp("<", _macd(), _const(0.0))),
+         "momentum ONLY when ATR is in the top quartile — volatile-realm specialty."),
+        # (c') regime-gated mean reversion: fade stretch, but only in the storm.
+        ("p_vol_realm_fade", "regime-gated (top ATR quartile)",
+         _and(_atr_quartile(160, 0.75), _cmp("<", _z(40), _const(-2.0))),
+         _and(_atr_quartile(160, 0.75), _cmp(">", _z(40), _const(2.0))),
+         "fade an extreme z-score ONLY in the top ATR quartile."),
+        # (d) no-clustering + patience on an existing family (slow EMA cross).
+        ("p_gap_cross_slow", "min-distance between entries",
+         _min_gap(32, _cross(_ema(21), _ema(55), above=True)),
+         _min_gap(32, _cross(_ema(21), _ema(55), above=False)),
+         "a slow EMA cross, forced >= 32 bars apart (one shot per move)."),
+        # (b)+(d) quiet-then-event with a long spacing floor on a Donchian break.
+        ("p_quiet_gap_break", "n-quiet-bars + min-distance",
+         _min_gap(64, _and(_quiet(16, 64, 0.7),
+                           _cmp(">", _donchian(20), _const(0.98)))),
+         _min_gap(64, _and(_quiet(16, 64, 0.7),
+                           _cmp("<", _donchian(20), _const(0.02)))),
+         "after 16 calm bars, a fresh 20-bar extreme; entries >= 64 bars apart."),
+        # (a) pullback clock: trade after price has coiled inside its range long.
+        ("p_coiled_pullback", "hold / pullback clock",
+         _and(_cmp(">", _bars_since(48), _const(0.75)),
+              _cmp(">", _rsi(14), _gene("pullback_rsi"))),
+         _and(_cmp(">", _bars_since(48), _const(0.75)),
+              _cmp("<", _rsi(14), _gene("rsi_oversold"))),
+         "coiledness > 0.75 (no new range break), then a directional RSI bias."),
+        # (c)+(d) volatile realm + spacing: the purest sniper.
+        ("p_sniper", "regime-gated + min-distance + quiet",
+         _min_gap(48, _and(_atr_quartile(160, 0.75),
+                           _and(_quiet(20, 96, 0.9),
+                                _cmp(">", _donchian(40), _const(0.85))))),
+         _min_gap(48, _and(_atr_quartile(160, 0.75),
+                           _and(_quiet(20, 96, 0.9),
+                                _cmp("<", _donchian(40), _const(0.15))))),
+         "the full patience stack: volatile realm, calm-before-event, wide spacing."),
+        # (b) symmetric sniper short via the noise-band fade in the storm.
+        ("p_storm_fade", "regime-gated volatility fade",
+         _and(_atr_quartile(160, 0.75),
+              _cross(_ema(9), _ema(21), above=True)),
+         _and(_atr_quartile(160, 0.75),
+              _cross(_ema(9), _ema(21), above=False)),
+         "EMA re-cross ONLY in the top ATR quartile (few, high-volatility entries)."),
+        # (a) multi-day hold expressed as a slow structure entry.
+        ("p_slow_structure", "hold / wide stop",
+         _and(_cmp(">", _ema(9), _ema(55)),
+              _cmp(">", _bars_since(96), _const(0.5))),
+         _and(_cmp("<", _ema(9), _ema(55)),
+              _cmp(">", _bars_since(96), _const(0.5))),
+         "trend alignment only after the range has coiled for half a window."),
+        # (d) THE RAREST EXTREME — very wide spacing (>= 2.5 days between entries).
+        #     The directive: "few standard bodies, ultra-rare entries". If even
+        #     these fire thousands of times, the grammar cannot express rarity and
+        #     the finding is that the frequency is intrinsic, not a tuning miss.
+        ("p_ultra_sniper", "ultra-rare entries (>= 240-bar spacing)",
+         _min_gap(240, _and(_quiet(32, 160, 0.6),
+                            _cmp(">", _donchian(60), _const(0.9)))),
+         _min_gap(240, _and(_quiet(32, 160, 0.6),
+                            _cmp("<", _donchian(60), _const(0.1)))),
+         "the rarest profile: calm month, fresh extreme, entries days apart."),
+        ("p_rare_vol_fade", "ultra-rare entries (>= 120-bar spacing)",
+         _min_gap(120, _and(_atr_quartile(240, 0.8),
+                            _cmp("<", _z(60), _const(-2.5)))),
+         _min_gap(120, _and(_atr_quartile(240, 0.8),
+                            _cmp(">", _z(60), _const(2.5)))),
+         "only an extreme fade, only in the top-20% ATR realm, days apart."),
+        ("p_sparse_trend", "ultra-rare entries (>= 160-bar spacing)",
+         _min_gap(160, _and(_cmp(">", _ema(21), _ema(89)),
+                            _cmp(">", _bars_since(192), _const(0.6)))),
+         _min_gap(160, _and(_cmp("<", _ema(21), _ema(89)),
+                            _cmp(">", _bars_since(192), _const(0.6)))),
+         "a slow trend after a long coil; one entry per few days."),
+    ]
+
+
+def patience_hypotheses() -> list[Hypothesis]:
+    """R87 — the patience-profile bodies (Session 4.0's ONLY stock).
+
+    Deterministic, ordered, concept-deduped. Each Hypothesis carries the mandate
+    it expresses as its grounding, so the session report can attribute any
+    gate-survivor to the patience lever that produced it.
+    """
+    out: list[Hypothesis] = []
+    for name, mandate, ln, sn, note in _patience_specs():
+        prog = g.Program(long=ln, short=sn, concept=_concept(name))
+        out.append(Hypothesis(
+            text=f"Patience mandate '{mandate}': {note}",
+            grounding=f"R87 mandate: {mandate}",
+            confidence=0.5,   # a profile hypothesis, not a proven edge
+            program=prog,
+        ))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # R74b — the intuition translator (plain Italian hunch -> body).
 # ---------------------------------------------------------------------------
+# ORDERED, MOST-SPECIFIC-FIRST. The R74b keyword collision (two distinct hunches
+# -> one body) came from a too-broad session/open entry swallowing the calendar
+# hunches. Specific calendar / level / cross entries are matched first, and the
+# generic London entry no longer keys on bare "apertura"/"open".
 _INTUITION_MAP = (
-    # (keywords, builder, human note)
-    (("sessione", "londra", "london", "apertura", "open"),
+    # (keywords, builder, human note)  — the six Architect intuitions (R81/R82/R83)
+    (("venerd", "friday", "fine settimana", "posizionamento settimanale"),
      lambda: g.Program(
-         long=_and(_killzone(7, 11), _cross(_ema(9), _ema(21), above=True)),
-         short=_and(_killzone(7, 11), _cross(_ema(9), _ema(21), above=False)),
+         long=_and(_dow(4), _cmp("<", _z(20), _const(-1.5))),
+         short=_and(_dow(4), _cmp(">", _z(20), _const(1.5))),
+         concept=_concept("intuition_friday_fade")),
+     "fade del posizionamento del venerdì (day-of-week)"),
+    (("dxy", "dollaro", "dollar", "indice del dollaro", "dollar index"),
+     lambda: g.Program(
+         long=_dxy_lag_align(4),
+         short=_not(_dxy_lag_align(4)),
+         concept=_concept("intuition_dxy_lead")),
+     "lead del DXY sui dollar pair (lagged reaction, read-only)"),
+    # R74b residual (Phase 7h/2.0): the canonical #3 hunch says "volatilità
+    # estrema ... inverte la direzione della giornata precedente" — words that
+    # matched NONE of the original keywords, so the bare "volatilit" entry below
+    # swallowed it. The prior-day reversal phrases are added here so the specific
+    # entry wins (this entry is checked before the generic one).
+    (("esaurimento", "cluster", "reversione di volatilità", "volatility cluster",
+      "giornata precedente", "mattina dopo", "inverte", "prior day", "prior-day",
+      "reversal"),
+     lambda: g.Program(
+         long=_and(_cmp("<", _prior_day_dir(), _const(0.0)), _cmp("<", _bb_dist(20, 2.0), _const(-1.0))),
+         short=_and(_cmp(">", _prior_day_dir(), _const(0.0)), _cmp(">", _bb_dist(20, 2.0), _const(1.0))),
+         concept=_concept("intuition_vol_cluster")),
+     "esaurimento del cluster di volatilità (prior-day + bande)"),
+    (("numeri tondi", "numero tondo", "tond", "round", "magnete"),
+     lambda: g.Program(
+         long=_and(_round_hit(50, 3.0), _cmp("<", _dist_round(50), _const(-1.0))),
+         short=_and(_round_hit(50, 3.0), _cmp(">", _dist_round(50), _const(1.0))),
+         concept=_concept("intuition_round_magnet")),
+     "magnetismo dei numeri tondi (price-level)"),
+    (("primo luned", "prima apertura del luned", "luned", "first monday",
+      "francoforte", "frankfurt", "prima settimana"),
+     lambda: g.Program(
+         long=_and(_and(_nth_weekday(1, 0), _killzone(7, 10)), _cross(_ema(9), _ema(21), above=True)),
+         short=_and(_and(_nth_weekday(1, 0), _killzone(7, 10)), _cross(_ema(9), _ema(21), above=False)),
+         concept=_concept("intuition_first_monday")),
+     "continuazione della prima apertura del lunedì (nth-weekday + killzone)"),
+    (("festivit", "vacanz", "holiday", "giappone", "jpy", "yen"),
+     lambda: g.Program(
+         long=_and(_jpy_holiday(1, 1), _cmp("<", _absret(60), _const(0.25))),
+         short=_and(_jpy_holiday(1, 1), _cmp(">", _absret(60), _const(0.75))),
+         concept=_concept("intuition_jpy_holiday")),
+     "compressione per festività JPY (holiday window)"),
+    # --- generic entries (kept collision-free) -------------------------------
+    (("gap", "buco di apertura", "apertura con gap"),
+     lambda: g.Program(
+         long=_and(_gap_open(12.0), _cmp("<", _prior_day_dir(), _const(0.0))),
+         short=_and(_gap_open(12.0), _cmp(">", _prior_day_dir(), _const(0.0))),
+         concept=_concept("intuition_gap_open")),
+     "gap di apertura che richiude (gap-open + prior-day)"),
+    (("londra", "london", "sessione di londra", "sessione"),
+     lambda: g.Program(
+         long=_and(_killzone(7, 11), _cmp("<", _z(20), _const(-1.0))),
+         short=_and(_killzone(7, 11), _cmp(">", _z(20), _const(1.0))),
          concept=_concept("intuition_session")),
-     "killzone di Londra con incrocio EMA"),
+     "rientro nella killzone di Londra"),
     (("rientro", "mean", "media", "eccesso", "estremo", "iper"),
      lambda: g.Program(
          long=_cmp("<", _z(20), _const(-2.0)),
@@ -381,9 +619,26 @@ _INTUITION_MAP = (
      "livelli RSI di ipervenduto/ipercomprato"),
 )
 
+# Specific entries are consulted before generic ones by construction; this list of
+# (generic_keyword -> specific_tag) documents the disambiguation that fixes the
+# collision and is pinned by the regression test.
+_DISAMBIGUATION = {
+    "venerd": "intuition_friday_fade",
+    "dxy": "intuition_dxy_lead",
+    "esaurimento": "intuition_vol_cluster",
+    "numero tondo": "intuition_round_magnet",
+    "primo luned": "intuition_first_monday",
+    "festivit": "intuition_jpy_holiday",
+}
+
 
 def translate_intuition(text: str) -> IntuitionResult:
-    """Map a plain-Italian hunch to a body, or explain WHY it cannot (R74b)."""
+    """Map a plain-Italian hunch to a body, or explain WHY it cannot (R74b).
+
+    The map is ordered most-specific-first, so a calendar/level/cross hunch is no
+    longer swallowed by the generic session entry (the R74b collision). A hunch the
+    grammar still cannot express is REFUSED with the reason, never faked.
+    """
     clean = (text or "").strip()
     if not clean:
         return IntuitionResult(text=clean, ok=False,
@@ -403,8 +658,10 @@ def translate_intuition(text: str) -> IntuitionResult:
         text=clean, ok=False,
         reason=("no grammar construct matches this hunch — the typed grammar "
                 "expresses entry logic (session, mean-reversion, breakout, "
-                "momentum, volatility, RSI); a hunch about money management or "
-                "fundamentals cannot be a body and is refused rather than faked"))
+                "momentum, volatility, RSI, and now calendar / round-number / "
+                "gap / prior-day / cross-instrument sensors); a hunch about money "
+                "management or fundamentals cannot be a body and is refused "
+                "rather than faked"))
 
 
 # ---------------------------------------------------------------------------

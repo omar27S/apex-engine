@@ -39,7 +39,7 @@ SACRED_FILES: tuple[str, ...] = (
 # The pinned SHA-256 of each sacred file, in the same order as SACRED_FILES.
 SACRED_HASHES: dict[str, str] = {
     "app/core/law.py":
-        "46829494e738c0197ed067c06aa4660874da4d5c00ccaedd8fff915d8afadafe",
+        "c37a791632a3fd75771aab21ed995d9e935c1acc32bb8f3eaa2622e51a20a885",
     "app/core/pairs.py":
         "3ecd3ebe1f19924c3f9c2f22987e06ffcc3cfd29d6a7bb62b582db508b54ced0",
     "app/core/tick_value.py":

@@ -56,6 +56,24 @@ def _series_leaf(rng) -> g.Node:
         return g.node(k, (int(rng.integers(30, 200)), int(rng.integers(50, 500))))
     if k == "session_vwap_dist":
         return g.node(k)
+    # --- R81/R82/R83 (Phase 7h) new series leaves ---------------------------
+    if k == "dist_round":
+        return g.node(k, (int(rng.choice((25, 50, 100))),))
+    if k == "prior_day_dir":
+        return g.node(k)
+    if k == "prior_day_atr_pct":
+        return g.node(k, (int(rng.integers(20, 200)),))
+    if k == "gap_pips":
+        return g.node(k)
+    if k == "dxy_proxy":
+        return g.node(k, (int(rng.integers(3, 60)),))
+    if k == "dxy_ret":
+        return g.node(k, (int(rng.integers(0, 48)),))
+    if k == "dxy_corr":
+        return g.node(k, (int(rng.integers(30, 200)),))
+    # --- R87 (Phase 7j) patience series leaf --------------------------------
+    if k == "bars_since_range":
+        return g.node(k, (int(rng.integers(10, 200)),))
     raise g.GrammarError(f"no draw rule for series leaf {k!r}")
 
 
@@ -105,7 +123,37 @@ def _bool(rng, depth: int) -> g.Node:
     if r < 0.76:
         h0 = int(rng.integers(0, 20))
         return g.node("killzone", (h0, h0 + int(rng.integers(1, 5))))
-    if r < 0.84:
+    # --- R81 calendar / price-level bool leaves -----------------------------
+    if r < 0.80:
+        return g.node("day_of_week", (int(rng.integers(0, 7)),))
+    if r < 0.83:
+        lo = int(rng.integers(1, 28))
+        return g.node("day_of_month", (lo, lo + int(rng.integers(0, 4))))
+    if r < 0.855:
+        return g.node("nth_weekday", (int(rng.integers(1, 6)), int(rng.integers(0, 7))))
+    if r < 0.875:
+        return g.node("jpy_holiday_window", (int(rng.integers(0, 3)), int(rng.integers(0, 3))))
+    if r < 0.90:
+        return g.node("round_number_hit", (int(rng.choice((25, 50, 100))),
+                                           float(round(rng.uniform(2.0, 15.0), 2))))
+    # --- R83 gap -----------------------------------------------------------------
+    if r < 0.915:
+        return g.node("gap_open", (float(round(rng.uniform(5.0, 40.0), 2)),))
+    # --- R82 cross-instrument lagged reaction ------------------------------------
+    if r < 0.93:
+        return g.node("dxy_lag_align", (int(rng.integers(0, 24)),))
+    # --- R87 (Phase 7j) patience bool nodes ---------------------------------
+    if r < 0.95:
+        return g.node("n_quiet_bars", (int(rng.integers(6, 40)),
+                                       int(rng.integers(20, 160)),
+                                       float(round(rng.uniform(0.4, 1.0), 2))))
+    if r < 0.965:
+        return g.node("atr_quartile", (int(rng.integers(40, 260)),
+                                       float(round(rng.uniform(0.6, 0.9), 2))))
+    if r < 0.975:
+        return g.node("min_gap_bars", (int(rng.integers(2, 24)),),
+                      (_bool(rng, depth - 1),))
+    if r < 0.985:
         return g.node("not", (), (_bool(rng, depth - 1),))
     combinator = "and" if rng.random() < 0.5 else "or"
     return g.node(combinator, (), (_bool(rng, depth - 1), _bool(rng, depth - 1)))

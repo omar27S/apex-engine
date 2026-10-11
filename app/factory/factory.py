@@ -177,7 +177,19 @@ def run_factory(universe, config: FactoryConfig, *,
 
     # R69 — screen the whole pool cheaply before the full evaluation.
     if config.staircase:
-        scr = staircase_mod.screen(population, staircase)
+        # R85 — the gross-to-friction gate at round 1. It reads the SAME cheap
+        # screen slice the round-1 evaluator uses (the result memory makes this
+        # free — no second evaluation), and refuses a candidate whose gross edge
+        # cannot pay 3x the friction it was invoiced. No data -> the gate stays
+        # silent (None), never blocking.
+        def _friction_gate(genome):
+            m = evaluator.report(genome, cheap_pairs).metrics
+            if m.trades <= 0:
+                return None
+            return staircase_mod.FrictionGate(gross_r=m.gross_r,
+                                              friction_r=m.gross_r - m.net_r)
+
+        scr = staircase_mod.screen(population, staircase, friction_gate=_friction_gate)
         screened = scr.survivors
         staircase_ledger = scr.to_dict()
         staircase_ledger["screened_out_before_full_eval"] = (

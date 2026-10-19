@@ -105,6 +105,22 @@ _CONSERVATIVE_SPREAD_PIPS: dict[str, float] = {
     "AUDJPY": 1.8,
     "CADJPY": 2.0,
     "NZDJPY": 2.2,
+    # expanded crosses (Founding Charter act 2) — wider retail spreads
+    "USDSEK": 3.0,
+    "USDNOK": 3.0,
+    "USDMXN": 4.5,
+    "USDZAR": 6.5,
+    "EURSEK": 2.5,
+    "EURNOK": 2.5,
+    "EURPLN": 3.0,
+    "EURHUF": 3.5,
+    "EURCZK": 3.5,
+    "GBPSEK": 3.0,
+    "AUDNZD": 2.0,
+    "AUDCAD": 2.0,
+    "AUDCHF": 2.2,
+    "NZDCAD": 2.5,
+    "NZDCHF": 2.5,
 }
 
 # ---------------------------------------------------------------------------
@@ -137,6 +153,22 @@ _REALISTIC_SPREAD_PIPS: dict[str, float] = {
     "AUDJPY": 0.7,
     "CADJPY": 0.8,
     "NZDJPY": 0.9,
+    # expanded crosses (Founding Charter act 2) — the tight end of an ECN
+    "USDSEK": 1.6,
+    "USDNOK": 1.6,
+    "USDMXN": 2.4,
+    "USDZAR": 3.5,
+    "EURSEK": 1.3,
+    "EURNOK": 1.3,
+    "EURPLN": 1.6,
+    "EURHUF": 1.9,
+    "EURCZK": 1.9,
+    "GBPSEK": 1.6,
+    "AUDNZD": 1.0,
+    "AUDCAD": 1.0,
+    "AUDCHF": 1.2,
+    "NZDCAD": 1.3,
+    "NZDCHF": 1.3,
 }
 
 

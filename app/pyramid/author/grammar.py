@@ -106,6 +106,15 @@ SERIES_KINDS: dict[str, _Spec] = {
     "dxy_corr": _Spec(SERIES, params="window:int"),
     # --- R87 (Phase 7j) — patience: the "structured pullback" clock ---------
     "bars_since_range": _Spec(SERIES, params="window:int"),
+    # --- R89 (Phase 7k) — gross-edge: signed move + pullback geometry --------
+    # (i) multi-day displacement: the signed distance price has traveled from
+    #     its origin ``window`` closed bars back, in units of the current ATR —
+    #     the "entry only after price travels > 2x ATR" distance measure.
+    "vol_displacement": _Spec(SERIES, params="window:int"),
+    # (ii) pullback depth in [0, 1]: where the close sits inside its trailing
+    #      ``window`` range (1 = at the window low, 0 = at the window high) — the
+    #      geometry of a pullback INTO a trend, the gross-fat entry location.
+    "pullback_depth": _Spec(SERIES, params="window:int"),
 }
 
 SCALAR_KINDS: dict[str, _Spec] = {
@@ -142,6 +151,11 @@ BOOL_KINDS: dict[str, _Spec] = {
     # (d) no-clustering: at least ``bars`` bars since the last occurrence of the
     #     child signal (min distance between entries; friction compounds per entry).
     "min_gap_bars": _Spec(BOOL, inputs=(BOOL,), params="bars:int"),
+    # --- R89 (Phase 7k) — THE GROSS-EDGE HUNT -------------------------------
+    # (e) session-boundary reversal: fire on a strong directional move right at a
+    #     session boundary (the 24h/8h/16h/21h events), fading a stretched leg.
+    #     ``front`` is the signed move scale (e.g. zscore); ``fade`` its threshold.
+    "session_boundary_reversal": _Spec(BOOL, inputs=(SERIES,), params="fade:float"),
 }
 
 PRIMITIVE_KINDS: dict[str, _Spec] = {**SERIES_KINDS, **SCALAR_KINDS, **BOOL_KINDS}
@@ -333,7 +347,20 @@ class Node:
                 raise GrammarError(f"atr_quartile bucket out of range: {p[1]}")
         elif self.kind == "min_gap_bars":
             _need_int(self.kind, p, 1)
-            _range_int(self.kind, p[0], 1, 480)
+            _range_int(self.kind, p[0], 1, 8000)   # R89: allow ~5-entries/year spacing
+        # --- R89 gross-edge hunt -------------------------------------------
+        elif self.kind == "vol_displacement":
+            _need_int(self.kind, p, 1)
+            _range_int(self.kind, p[0], 4, 384)   # a multi-day displacement ref
+        elif self.kind == "pullback_depth":
+            _need_int(self.kind, p, 1)
+            _range_int(self.kind, p[0], 8, 400)
+        elif self.kind == "session_boundary_reversal":
+            if len(p) != 1:
+                raise GrammarError("session_boundary_reversal needs (fade,)")
+            f = float(p[0])
+            if not (0.5 <= f <= 4.0):
+                raise GrammarError(f"session_boundary_reversal fade out of range: {p[0]}")
 
 
 def _need_int(kind, p, n):
@@ -491,6 +518,14 @@ class _Emitter:
             return f"_atr_quartile(high, low, close, {p[0]}, {float(p[1])!r})"
         if k == "min_gap_bars":
             return f"_min_gap_bars({self.expr(n.children[0])}, {p[0]})"
+        # --- R89 gross-edge hunt --------------------------------------------
+        if k == "vol_displacement":
+            return f"_vol_displacement(close, high, low, {p[0]})"
+        if k == "pullback_depth":
+            return f"_pullback_depth(high, low, close, {p[0]})"
+        if k == "session_boundary_reversal":
+            return (f"_session_boundary_reversal(ts, {self.expr(n.children[0])}, "
+                    f"{float(p[0])!r})")
         raise GrammarError(f"cannot emit node kind {k!r}")
 
 
@@ -1151,6 +1186,55 @@ def _bars_since_range(high, low, close, window):
                 last = i
         since = i - last if last >= 0 else i
         out[i] = min(1.0, float(since) / float(window))
+    return out
+
+
+def _vol_displacement(close, high, low, window):
+    """R89 (Phase 7k) — the signed multi-day DISPLACEMENT: how far, in units of
+    the current ATR, price has traveled from its origin ``window`` closed bars
+    back. Positive = price is above its origin (an up-leg); the distance measure
+    the "entry only after price travels > 2x ATR" mandate requires. Causal: reads
+    only closed bars up to and including i."""
+    n = len(close)
+    at = _atr(high, low, close, 14)
+    out = _nan(n)
+    for i in range(window, n):
+        den = at[i]
+        if np.isfinite(den) and den > 0 and np.isfinite(close[i - window]) and np.isfinite(close[i]):
+            out[i] = (close[i] - close[i - window]) / den
+    return out
+
+
+def _pullback_depth(high, low, close, window):
+    """R89 (Phase 7k) — pullback geometry in [0, 1]: where the close sits inside
+    its trailing ``window`` range (0 = at the window high, 1 = at the window low).
+    The gross-fat entry is a shallow pullback INTO an established up-leg (near 0)
+    or a bounce off the low of a down-leg (near 1). Causal (closed bars only)."""
+    n = len(close)
+    out = _nan(n)
+    for i in range(window, n):
+        up = np.nanmax(high[i - window:i])
+        lo = np.nanmin(low[i - window:i])
+        rng = up - lo
+        if np.isfinite(rng) and rng > 0 and np.isfinite(close[i]):
+            out[i] = min(1.0, max(0.0, (up - close[i]) / rng))
+    return out
+
+
+def _session_boundary_reversal(ts, front, fade):
+    """R89 (Phase 7k) — fire a REVERSAL at a session boundary. A session boundary
+    is the bar whose hour is one of {{0, 8, 16, 21}} UTC (the Tokyo/London/NY
+    turns). ``front`` is a signed stretch measure (e.g. a z-score); the gate fires
+    once per boundary when the leg into the boundary is stretched by ``fade``.
+    Causal: the hour is a property of the CURRENT closed bar only."""
+    n = len(ts)
+    out = np.zeros(n, dtype=bool)
+    for i in range(n):
+        h = int((ts[i] % 86400) // 3600)
+        if h == 0 or h == 8 or h == 16 or h == 21:
+            v = front[i]
+            if np.isfinite(v) and abs(v) >= fade:
+                out[i] = True
     return out
 
 

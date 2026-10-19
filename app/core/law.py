@@ -220,20 +220,22 @@ def normalize_pair(symbol: str) -> str | None:
 
 
 def is_tradable_pair(symbol: str, universe: Iterable[str] | None = None) -> bool:
-    """THE hard gate: is ``symbol`` a tradable Constellation pair?
+    """THE hard gate: is ``symbol`` a pair APEX may TRADE?
 
     Fail-closed: a symbol that does not normalize cleanly is rejected. When
-    ``universe`` is ``None`` the Constellation is resolved lazily from
-    ``app.core.pairs`` (see module docstring); an empty/unavailable universe
-    rejects everything.
+    ``universe`` is ``None`` the default is the OPERATIONAL set — the 15 pairs on
+    which trades may be proposed (Founding Charter: the 15 study pairs are SENSORS
+    ONLY and are never tradable). Callers may pass an explicit ``universe`` to ask
+    a narrower membership question (e.g. the majors), but the default never
+    includes a study pair.
     """
     canonical = normalize_pair(symbol)
     if canonical is None:
         return False
     if universe is None:
-        from app.core.pairs import CONSTELLATION_PAIRS  # lazy: see module docstring
+        from app.core.constellation import OPERATIONAL_PAIRS  # lazy: see module docstring
 
-        universe = CONSTELLATION_PAIRS
+        universe = OPERATIONAL_PAIRS
     return canonical in universe
 
 

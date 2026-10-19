@@ -258,12 +258,28 @@ def _load_ensemble() -> None:
         register_family("ensemble", _ensemble_family)
 
 
+def _load_ml() -> None:
+    """Register the ML families (Mega Phase 2, Section D).
+
+    A learned family is dispatched like any other through the SHARED gate stack; the
+    walk-forward causality lives inside ``ml_models`` so the evaluator sees only
+    masks (identical treatment to a hand-crafted family).
+    """
+    from app.quant import ml_models as ml
+    from app.quant.genome import ML_FAMILIES
+
+    for name in ML_FAMILIES:
+        if name not in FAMILY_SIGNALS:
+            register_family(name, ml.ml_family)
+
+
 _load_classic()
 _load_smc()
 _load_quant()
 _load_pattern()
 _load_relative_value()
 _load_ensemble()
+_load_ml()
 
 
 def _n(values) -> np.ndarray:
@@ -576,6 +592,17 @@ def dispatch(genome, ctx: SignalContext):
     activation = _activation_mask(genome, ctx)
     long_a, short_a = long_c & activation, short_c & activation
     record("after_activation", long_a, short_a)
+
+    # JUMP 7 — THE MULTI-LAYER COORDINATION GATE. A layered genome carries a
+    # strategic/tactical stack (D1 trend -> H4 structure) that GATES the execution
+    # signal: execution fires only when the higher layers permit the direction. A
+    # FLAT genome (no layers) is a no-op, so the classic path is byte-identical.
+    layers = getattr(genome, "layers", ()) or ()
+    if layers:
+        from app.civilization import layers as layers_mod
+        long_lm, short_lm = layers_mod.layer_masks(genome, ctx)
+        long_a, short_a = long_a & long_lm, short_a & short_lm
+        record("after_layers", long_a, short_a)
 
     required = (
         int(getattr(genome, "trend_align", 1)) != 0,

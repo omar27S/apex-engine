@@ -22,7 +22,7 @@ from typing import Mapping
 
 import pandas as pd
 
-from app.core.constellation import MAJOR_PAIRS
+from app.core.constellation import CONSTELLATION_PAIRS, MAJOR_PAIRS
 from app.core.law import normalize_pair
 
 ACCOUNT_CURRENCY = "USD"
@@ -35,6 +35,20 @@ ORACLE_MAJORS: tuple[str, ...] = tuple(
 )
 USD_BASE_MAJORS: tuple[str, ...] = tuple(p for p in ORACLE_MAJORS if p[:3] == "USD")
 USD_QUOTE_MAJORS: tuple[str, ...] = tuple(p for p in ORACLE_MAJORS if p[3:] == "USD")
+
+# THE EXPANSION (Founding Charter act 2). The expanded Constellation adds <USD-
+# base>/USD and USD/<quote> pairs whose quote currencies (SEK, NOK, MXN, ZAR, PLN,
+# HUF, CZK) are NOT carried by the seven majors. They are read from their OWN
+# frames when supplied (usd/ccy -> rate = 1/price; ccy/usd -> rate = price), and
+# otherwise simply omitted — fail-closed, no magic default, exactly like the
+# majors. The majors remain the only pairs the oracle derives a currency from
+# without being handed that pair's frame.
+EXPANDED_PAIRS: tuple[str, ...] = tuple(
+    p for p in CONSTELLATION_PAIRS
+    if p not in ORACLE_MAJORS and (p[:3] == ACCOUNT_CURRENCY or p[3:] == ACCOUNT_CURRENCY)
+)
+_EXPANDED_USD_BASE: frozenset[str] = frozenset(p for p in EXPANDED_PAIRS if p[:3] == "USD")
+_EXPANDED_USD_QUOTE: frozenset[str] = frozenset(p for p in EXPANDED_PAIRS if p[3:] == "USD")
 
 
 class RateOracleStalenessError(ValueError):
@@ -69,9 +83,9 @@ def build_usd_rates(major_prices: Mapping[str, float]) -> dict[str, float]:
         price = _positive_finite(raw_price)
         if price is None:
             continue
-        if pair in USD_QUOTE_MAJORS:
+        if pair in USD_QUOTE_MAJORS or pair in _EXPANDED_USD_QUOTE:
             rates[pair[:3]] = price
-        elif pair in USD_BASE_MAJORS:
+        elif pair in USD_BASE_MAJORS or pair in _EXPANDED_USD_BASE:
             rates[pair[3:]] = 1.0 / price
     return rates
 

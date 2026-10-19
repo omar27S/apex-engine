@@ -30,6 +30,7 @@ from app.quant.genome import (
     ENSEMBLE_MIN_MEMBERS,
     FAMILIES,
     GENE_BOUNDS,
+    ML_FAMILIES,
     StrategyGenome,
     clamp_gene,
 )
@@ -48,6 +49,8 @@ __all__ = [
 # R15: the ensemble floor is sealed in genome.py — imported, never re-declared.
 ENSEMBLE_MAX_MEMBERS = 10
 _ML_PREFIX = "ml_"
+# The genes that parameterize the learned models (drawn only for an ML family).
+_ML_GENES = frozenset({"ml_horizon", "ml_confidence", "ml_decay"})
 _MAX_MEMBER_DIVERSITY_TRIES = 40
 
 # R58 (Phase 7c) — THE ELITE SOUP. Ensemble members are drawn from the previous
@@ -191,7 +194,15 @@ def family_draw_weights() -> dict[str, float]:
 
 
 def _eligible_families(concrete: bool) -> list[str]:
-    """Families that may be drawn. ``concrete`` excludes ensemble and ``ml_*``."""
+    """Families that may be drawn by the weighted search.
+
+    The ``ml_*`` learned families are entered through the institutional SEEDS and the
+    population's registration (Mega Phase 2, Section D), NOT through the weighted
+    random draw: keeping them out of this set leaves the R10 draw stream for every
+    other family byte-identical, so the pinned tournament reproductions hold.
+    ``concrete`` additionally excludes the ensemble (R3 -- an ensemble member must be
+    a plain series model, never a nested ensemble or a learned model).
+    """
     out = [f for f in FAMILIES if not f.startswith(_ML_PREFIX)]
     if concrete:
         out = [f for f in out if f != ENSEMBLE_FAMILY]
@@ -231,8 +242,18 @@ def _draw_gene(rng: np.random.Generator, family: str, gene: str):
 
 
 def _draw_genes(rng: np.random.Generator, family: str) -> dict:
-    """Every numeric gene for ``family``, drawn and coherence-repaired."""
-    genes = {b.name: _draw_gene(rng, family, b.name) for b in GENE_BOUNDS}
+    """Every numeric gene that applies to ``family``, drawn and coherence-repaired.
+
+    The ML genes (``ml_horizon``/``ml_confidence``/``ml_decay``) are drawn ONLY for
+    an ML family: a non-ML genome keeps its defaults, so adding the learned families
+    does not shift the weighted draw stream for every other family (the pinned
+    tournament reproductions stay byte-identical).
+    """
+    genes = {
+        b.name: _draw_gene(rng, family, b.name)
+        for b in GENE_BOUNDS
+        if family in ML_FAMILIES or b.name not in _ML_GENES
+    }
     return _repair_coherence(genes, family)
 
 
@@ -314,6 +335,7 @@ def random_genome(
     *,
     concrete: bool = False,
     ensemble_quota: float = 0.0,
+    layers_quota: float = 0.0,
 ) -> StrategyGenome:
     """A fresh random genome, every gene drawn inside the law.
 
@@ -323,6 +345,11 @@ def random_genome(
     R55 — ``ensemble_quota`` (a probability in [0, 1]) forces the ensemble family
     on that share of draws, giving ensembles a GUARANTEED population share instead
     of competing for the table's weighted draw. Ignored when ``concrete``.
+
+    JUMP 7 — ``layers_quota`` (a probability in [0, 1]) gives that share of draws a
+    MULTI-LAYER coordination stack (strategic D1 + tactical H4 above the execution
+    M15). Ignored when ``concrete`` (a leaf must stay flat). Honest: 0.0 leaves the
+    classic flat genome unchanged (byte-identical).
     """
     family = _draw_family(rng, concrete)
     if not concrete and ensemble_quota > 0.0 and rng.random() < ensemble_quota:
@@ -331,8 +358,27 @@ def random_genome(
     if family == ENSEMBLE_FAMILY:
         genes = _attach_ensemble(genes, rng)
     genes["family"] = family
+    if not concrete and layers_quota > 0.0 and family != ENSEMBLE_FAMILY \
+            and rng.random() < layers_quota:
+        genes["layers"] = _draw_layers(family, rng)
     # from_dict clamps and ignores unknown keys — the final safety net.
     return StrategyGenome.from_dict(genes)
+
+
+def _draw_layers(execution_family: str, rng: np.random.Generator) -> tuple[dict, ...]:
+    """Compose a random 2-3 layer coordination stack (execution family = the signal)."""
+    from app.civilization import layers as layers_mod
+
+    concrete = [f for f in _eligible_families(concrete=True)
+                if f != ENSEMBLE_FAMILY]
+    strat = str(rng.choice(concrete))
+    tact = str(rng.choice(concrete))
+    return layers_mod.compose_layers(
+        execution_family=execution_family, strategic_family=strat,
+        tactical_family=tact,
+        strategic_direction=int(rng.choice([-1, 0, 1])),
+        tactical_direction=int(rng.choice([-1, 0, 1])),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +424,14 @@ def mutate_genome(
 
     genes = _repair_coherence(genes, family)
     genes["family"] = family
+
+    # JUMP 7 — a layered genome keeps its coordination stack through mutation (its
+    # direction clauses may drift); a flat genome stays flat (no phantom layers).
+    if genome.layers:
+        from app.civilization import layers as layers_mod
+        genes["layers"] = layers_mod.mutate_layers(genome, rng, rate=rate)
+    else:
+        genes["layers"] = ()
 
     if family == ENSEMBLE_FAMILY:
         # R58 — provenance survives an in-place mutation of an ensemble: an elite
@@ -502,6 +556,13 @@ def crossover_genome(
 
     genes = _repair_coherence(genes, family)
     genes["family"] = family
+
+    # JUMP 7 — a multi-layer child takes the coordination stack from whichever
+    # parent carries one (preferring parent ``a``); a flat pair stays flat.
+    if a.layers or b.layers:
+        genes["layers"] = tuple(dict(l) for l in (a.layers if a.layers else b.layers))
+    else:
+        genes["layers"] = ()
 
     if family == ENSEMBLE_FAMILY:
         pool = []

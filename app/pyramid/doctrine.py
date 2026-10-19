@@ -32,6 +32,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from app.core.constellation import OPERATIONAL_PAIRS
+
 __all__ = [
     "AVANT_GARDE_TRADE_TARGET",
     "AVANT_GARDE_BUDGET_FRACTION",
@@ -49,9 +51,11 @@ AVANT_GARDE_TRADE_TARGET: int = 200
 AVANT_GARDE_BUDGET_FRACTION: float = 0.15
 
 # R26 — how many pairs the reserve rotation keeps a reserve officer on, per step.
-# The schedule advances one pair per muster generation; period 15 visits every
-# constellation pair exactly once before repeating (zero uncovered territory).
-RESERVE_ROTATION_PERIOD: int = 15
+# The schedule advances one pair per muster generation; the period equals the
+# OPERATIONAL pair count (the 15 tradeable pairs), so it visits every operational
+# pair exactly once before repeating (zero uncovered territory). The 15 study
+# pairs are sensors, not command territory, so they are not in the rotation.
+RESERVE_ROTATION_PERIOD: int = len(OPERATIONAL_PAIRS)
 
 
 def _validate() -> None:

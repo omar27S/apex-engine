@@ -118,6 +118,12 @@ class FitnessResult:
     reason: str
     gross_r: float = 0.0  # DIAGNOSTIC ONLY — must not enter the rank key
     autopsy_resilience: float = 1.0  # R39 tiebreak; DIAGNOSTIC-adjacent
+    # THE FULL FEEDING — the report fields the Letter's table reads, carried through
+    # the rank result so the durable report never drops them (never a rank key).
+    profit_factor: float | None = None
+    gross_profit_r: float = 0.0
+    gross_loss_r: float = 0.0
+    wins: int = 0
 
     def key(self) -> tuple:
         """Sort key, best-first under ``min`` (any value = lower is better).
@@ -171,6 +177,10 @@ def fitness(
         reason=reason,
         gross_r=report.gross_r,
         autopsy_resilience=resilience,
+        profit_factor=report.profit_factor,
+        gross_profit_r=report.gross_profit_r,
+        gross_loss_r=report.gross_loss_r,
+        wins=report.wins,
     )
 
 

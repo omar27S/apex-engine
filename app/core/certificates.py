@@ -309,6 +309,7 @@ def verify_chain(
     certs: list[dict],
     *,
     expected_index: bool = True,
+    expect_head: str | None = None,
 ) -> ChainCheck:
     """R44 — verify a whole certificate chain, genesis first.
 
@@ -317,6 +318,11 @@ def verify_chain(
     predecessor as ``prev_hash`` (``""`` at index 0). A break at position k is
     reported LOUDLY and invalidates every certificate from k onward (``broken_at``
     lists all of them), so tampering with certificate k breaks k..N.
+
+    ``expect_head`` (R44 fail-closed) — when supplied, EVERY certificate must bind
+    that HEAD. The check is deliberately zone-aware: the caller names the expected
+    HEAD once and the whole chain must agree, so a certificate bound to an older
+    HEAD (or the unverified sentinel) is a loud mismatch, never a silent pass.
     """
     reasons: list[str] = []
     broken_at: list[int] = []
@@ -325,7 +331,7 @@ def verify_chain(
     for i, cert in enumerate(certs):
         digests.append(str(cert.get("signature", "")))
         local: list[str] = []
-        check = verify_certificate(cert)
+        check = verify_certificate(cert, expect_head=expect_head)
         if not check.ok:
             local.extend(check.reasons)
         if expected_index and int(cert.get("chain_index", -1)) != i:

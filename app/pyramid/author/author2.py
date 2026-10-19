@@ -36,6 +36,7 @@ __all__ = [
     "IntuitionResult",
     "grounded_hypotheses",
     "patience_hypotheses",
+    "hunt_hypotheses",
     "translate_intuition",
     "novelty_hypothesis",
     "fingerprint",
@@ -224,6 +225,19 @@ def _atr_quartile(window: int, bucket: float = 0.75):
 
 def _bars_since(window: int):
     return g.node("bars_since_range", (int(window),))
+
+
+# --- R89 (Phase 7k) GROSS-EDGE builders — the fat-hunt primitives -----------
+def _vol_disp(window: int):
+    return g.node("vol_displacement", (int(window),))
+
+
+def _pb_depth(window: int):
+    return g.node("pullback_depth", (int(window),))
+
+
+def _sbr(fade: float, front):
+    return g.node("session_boundary_reversal", (float(fade),), (front,))
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +530,96 @@ def patience_hypotheses() -> list[Hypothesis]:
             text=f"Patience mandate '{mandate}': {note}",
             grounding=f"R87 mandate: {mandate}",
             confidence=0.5,   # a profile hypothesis, not a proven edge
+            program=prog,
+        ))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# R89 (Phase 7k) — THE GROSS-EDGE HUNT: three families aimed at gross FAT.
+# The Session 4.0 finding: half the patience bodies lack even a GROSS edge, so
+# no amount of extra patience can rescue them — friction is not the only wall.
+# These families aim at the DIRECTIONALLY-RICH, RARE event itself:
+#   (1) multi-day displacement — enter after price travels > 2x ATR from origin;
+#   (2) volatility-breakout-with-distance — a fresh range break only after a
+#       measured > 2x ATR travel (distance, not just a new extreme);
+#   (3) session-boundary reversals — the 24h/8h/16h/21h turn as the event.
+# Each is causal, registered (`grammar`), and tested from the AUTHOR side.
+# ---------------------------------------------------------------------------
+def _hunt_specs() -> list[tuple[str, str, g.Node, g.Node, str]]:
+    """(name, mandate, long_tree, short_tree, grounding)."""
+    return [
+        # (1) MULTI-DAY DISPLACEMENT: the leg has already traveled > 2x ATR from
+        #     its multi-day origin, AND the structure agrees (trend), AND spaced.
+        ("h_disp_trend", "multi-day displacement (> 2x ATR travel)",
+         _min_gap(96, _and(_cmp(">", _vol_disp(96), _const(2.0)),
+                           _cmp(">", _ema(21), _ema(55)))),
+         _min_gap(96, _and(_cmp("<", _vol_disp(96), _const(-2.0)),
+                           _cmp("<", _ema(21), _ema(55)))),
+         "enter WITH a >2x ATR multi-day displacement, wide stop for the rest of it."),
+        ("h_disp_pullback", "displacement + shallow pullback (buy the dip)",
+         _min_gap(64, _and(_cmp(">", _vol_disp(120), _const(2.5)),
+                           _cmp(">", _pb_depth(48), _const(0.65)))),
+         _min_gap(64, _and(_cmp("<", _vol_disp(120), _const(-2.5)),
+                           _cmp("<", _pb_depth(48), _const(0.35)))),
+         "a >2.5x ATR up-leg, then a pullback toward the range low (depth>0.65) — buy the dip."),
+        ("h_disp_fade", "displacement exhaustion fade",
+         _min_gap(96, _and(_cmp(">", _vol_disp(160), _const(3.0)),
+                           _cmp("<", _z(40), _const(-1.5)))),
+         _min_gap(96, _and(_cmp("<", _vol_disp(160), _const(-3.0)),
+                           _cmp(">", _z(40), _const(1.5)))),
+         "fade a >3x ATR displacement once momentum z-score rolls over."),
+        # (2) VOLATILITY-BREAKOUT-WITH-DISTANCE: a fresh Donchian extreme IS the
+        #     breakout — require it in the top ATR realm and demand spacing, so a
+        #     'breakout' that has already run far is the only one taken.
+        ("h_vbreak_dist", "volatility breakout with distance",
+         _min_gap(80, _and(_atr_quartile(160, 0.7),
+                           _cmp(">", _donchian(24), _const(0.99)))),
+         _min_gap(80, _and(_atr_quartile(160, 0.7),
+                           _cmp("<", _donchian(24), _const(0.01)))),
+         "a fresh 24-bar extreme ONLY in the top-30% ATR realm, entries spaced."),
+        ("h_vbreak_run", "breakout after a >2x ATR run",
+         _min_gap(96, _and(_cmp(">", _donchian(20), _const(0.98)),
+                           _cmp(">", _vol_disp(64), _const(2.0)))),
+         _min_gap(96, _and(_cmp("<", _donchian(20), _const(0.02)),
+                           _cmp("<", _vol_disp(64), _const(-2.0)))),
+         "break to a new extreme only AFTER the leg already traveled >2x ATR."),
+        ("h_vbreak_squeeze", "squeeze then volatile breakout",
+         _min_gap(120, _and(_not(_atr_quartile(120, 0.5)),
+                            _cmp(">", _donchian(40), _const(0.98)))),
+         _min_gap(120, _and(_not(_atr_quartile(120, 0.5)),
+                            _cmp("<", _donchian(40), _const(0.02)))),
+         "sit in the lower ATR half, then break a 40-bar extreme (squeeze release)."),
+        # (3) SESSION-BOUNDARY REVERSALS: the 24h/8h/16h/21h turns as the event.
+        ("h_boundary_fade", "session-boundary reversal (fade the stretched leg)",
+         _sbr(2.0, _z(40)),
+         _and(_sbr(2.0, _z(40)), _cmp("<", _z(40), _const(0.0))),
+         "at a session boundary, fade a >=2-sigma stretched leg (the turn event)."),
+        ("h_boundary_fade_spaced", "session boundary + wide spacing",
+         _min_gap(64, _sbr(2.5, _z(60))),
+         _min_gap(64, _and(_sbr(2.5, _z(60)), _cmp("<", _z(60), _const(0.0)))),
+         "a >=2.5-sigma boundary stretch, at most one attempt per 64 bars."),
+        ("h_boundary_trend_join", "session-boundary trend join",
+         _and(_sbr(1.5, _z(40)), _cmp(">", _ema(21), _ema(55))),
+         _and(_sbr(1.5, _z(40)), _cmp("<", _ema(21), _ema(55))),
+         "a >=1.5-sigma boundary move INTO the prevailing trend (join, not fade)."),
+    ]
+
+
+def hunt_hypotheses() -> list[Hypothesis]:
+    """R89 (Phase 7k) — the gross-edge hunt bodies (Session 5.0's ONLY stock).
+
+    Deterministic, ordered, concept-deduped. Each carries the mandate it expresses
+    as its grounding so the frontier sweep can attribute a curve point to the
+    fat-hunt lever that produced it.
+    """
+    out: list[Hypothesis] = []
+    for name, mandate, ln, sn, note in _hunt_specs():
+        prog = g.Program(long=ln, short=sn, concept=_concept(name))
+        out.append(Hypothesis(
+            text=f"Gross-edge mandate '{mandate}': {note}",
+            grounding=f"R89 mandate: {mandate}",
+            confidence=0.5,
             program=prog,
         ))
     return out

@@ -96,6 +96,45 @@ def test_render_empty_is_honest():
     assert "no records yet" in ledger_mod.render_last_days([], days=7)
 
 
+# --- DEBT-034: the derating factor, MEASURED not guessed -------------------
+
+def _rec(trials: int, seconds: float) -> FactoryRecord:
+    return FactoryRecord(date="2026-10-10", machine="heart", job="j",
+                         trials=trials, machine_seconds=seconds)
+
+
+def test_measured_derating_needs_two_timed_runs_and_is_honest_otherwise():
+    # a single run cannot separate throughput from overhead -> None, never a guess.
+    one = ledger_mod.measured_derating([_rec(100, 60.0)])
+    assert one["factor"] is None and one["n"] == 1
+    assert "non misurato" in one["reading"]
+    assert ledger_mod.measured_derating([])["factor"] is None
+
+
+def test_measured_derating_is_median_over_best_throughput():
+    # best throughput = 100 trials/min (200 trials in 120 s); the median run is
+    # 50 trials/min -> derating 0.5 (the overhead penalty, measured).
+    recs = [_rec(200, 120.0), _rec(100, 120.0), _rec(100, 120.0)]
+    d = ledger_mod.measured_derating(recs)
+    assert d["best_trials_per_min"] == pytest.approx(100.0)
+    assert d["median_trials_per_min"] == pytest.approx(50.0)
+    assert d["factor"] == pytest.approx(0.5)
+    assert "derating misurato" in d["reading"]
+
+
+def test_a_perfectly_steady_machine_derates_to_one():
+    d = ledger_mod.measured_derating([_rec(100, 60.0), _rec(100, 60.0)])
+    assert d["factor"] == pytest.approx(1.0)
+
+
+def test_render_carries_the_measured_derating(tmp_path):
+    path = tmp_path / "l.jsonl"
+    for t, s in ((200, 120.0), (100, 120.0), (100, 120.0)):
+        ledger_mod.append([], _rec(t, s), path)
+    text = ledger_mod.render_last_days(ledger_mod.load(path), days=3)
+    assert "DERATING" in text and "0.5" in text
+
+
 # --- R75 turbo budget ------------------------------------------------------
 
 def test_budget_sealed_values():

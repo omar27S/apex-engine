@@ -1,4 +1,4 @@
-"""THE INSTITUTIONAL SEEDS — one curated genome per family (44 total).
+"""THE INSTITUTIONAL SEEDS — one curated genome per family (47 total).
 
 Each seed is hand-parameterized to its family's concept (the Phase-2.2-era seed
 style) and carries GATE DIVERSITY: a counter-trend/reversion seed explicitly sets
@@ -7,7 +7,9 @@ the fixed origin of the lineage universe — the reference DNA the breeding loom
 seeded from.
 
 The ensemble seed's members are deliberately DIVERSE families (no two identical),
-with an explicit quorum (R3).
+with an explicit quorum (R3). As of Mega Phase 2 (Section D) the three ML families
+(``ml_gradient_boosting``, ``ml_lstm_pattern``, ``ml_bayesian_regime``) each carry
+a seed too, so the learned models enter the tournament like any other family.
 
 Every seed is validated by ``tests/quant/test_seeds.py``: it must fire at least one
 RAW signal on the real EURUSD tape under a permissive gate probe, round-trip
@@ -98,6 +100,10 @@ SEED_SPECS: dict[str, dict] = {
             StrategyGenome(family="trend_pullback").to_dict(),
         ),
     ),
+    # --- machine learning (Mega Phase 2, Section D): lightweight learned models ---
+    "ml_gradient_boosting": dict(trend_align=0, ml_horizon=4, ml_confidence=0.55, ml_decay=0.9),
+    "ml_lstm_pattern": dict(trend_align=0, ml_horizon=4, ml_confidence=0.55, ml_decay=0.9),
+    "ml_bayesian_regime": dict(trend_align=0, ml_horizon=4, ml_confidence=0.6, ml_decay=0.95),
 }
 
 

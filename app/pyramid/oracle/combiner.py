@@ -40,10 +40,12 @@ from app.pyramid.oracle.priests import PRIEST_DOMAINS, priest_outputs
 
 __all__ = [
     "UNCALIBRATED_NOTE",
+    "SECOND_SIGHT_WEIGHT",
     "OracleWeights",
     "OracleVerdict",
     "combine",
     "score",
+    "second_sight",
     "uniform_weights",
 ]
 
@@ -51,6 +53,13 @@ UNCALIBRATED_NOTE: str = (
     "AOS is UNCALIBRATED v1 — a RANKING, not a probability. "
     "Reliability-binning calibration is deferred to Phase 3.3."
 )
+
+# C3 — THE ORACLE'S SECOND SIGHT. The AOS consumes the One Brain's cognitive
+# package (intuition confidence, emotion, simulation coverage, theory survival) as
+# extra scoring features. The blend weight is SMALL: the 45 acolytes remain the
+# spine of the score; cognition informs it. The brain and the scorer become one,
+# without either erasing the other.
+SECOND_SIGHT_WEIGHT: float = 0.25
 
 # Clip so a 0/1 acolyte score does not send the log-odds to infinity.
 _EPS: float = 1e-3
@@ -107,6 +116,7 @@ class OracleVerdict:
     acolyte_missing: tuple[str, ...]
     priest_outputs: dict[str, float]
     evidence: float                         # summed weighted log-odds (diagnostic)
+    second_sight: dict | None = None        # C3 — the brain's cognitive view
     uncalibrated: bool = True
     note: str = UNCALIBRATED_NOTE
 
@@ -116,6 +126,7 @@ class OracleVerdict:
             "acolyte_missing": list(self.acolyte_missing),
             "priest_outputs": dict(self.priest_outputs),
             "evidence": self.evidence,
+            "second_sight": self.second_sight,
             "uncalibrated": self.uncalibrated,
             "note": self.note,
         }
@@ -125,6 +136,7 @@ def combine(
     acolyte_scores: dict[str, float | None],
     priests: dict[str, float],
     weights: OracleWeights | None = None,
+    cognitive: dict | None = None,
 ) -> "tuple[float, float, tuple[str, ...]]":
     """Weighted-logistic combination -> ``(aos, evidence, missing_names)``.
 
@@ -132,6 +144,11 @@ def combine(
     missing AND there is no usable evidence, the function FAILS CLOSED: it raises
     ``ValueError`` rather than emit a confident default. An Oracle with no eyes
     must not guess.
+
+    C3 — when ``cognitive`` (the One Brain's package for this candidate) is given,
+    the AOS is blended with the Oracle's SECOND SIGHT over it: the acolyte consensus
+    stays the spine (weight ``1 - SECOND_SIGHT_WEIGHT``) and cognition informs the
+    rest. Without a cognitive package the AOS is unchanged (honest).
     """
     weights = weights or uniform_weights()
     missing: list[str] = []
@@ -168,7 +185,64 @@ def combine(
     # as more inputs agree. bias is added AFTER normalization as a prior.
     normalized = (evidence / total_weight) if total_weight > 0 else evidence
     normalized += float(weights.bias)
-    return _logistic(normalized), evidence, tuple(missing)
+    aos = _logistic(normalized)
+    if cognitive:
+        ss = second_sight(cognitive)
+        if ss["score"] is not None:
+            aos = ((1.0 - SECOND_SIGHT_WEIGHT) * aos
+                   + SECOND_SIGHT_WEIGHT * float(ss["score"]))
+    return aos, evidence, tuple(missing)
+
+
+def second_sight(cognitive: dict | None) -> dict:
+    """C3 — the Oracle's SECOND SIGHT over a cognitive package (the brain's view).
+
+    Blends the package's measured features into a single ``[0,1]`` score:
+    intuition confidence (how strong the gut), theory survival (is the claim alive),
+    simulation coverage (were the fragile points covered), and emotion (a calm mind
+    scores higher than a fearful one). FEELING and DREAM are taken at their tongue
+    weight — a feeling INFORMS the score, it never dominates it.
+
+    Honest: with no measured feature the score is ``None`` (the second sight is
+    silent), never a neutral 0.5 masquerading as knowledge.
+    """
+    if not cognitive:
+        return {"score": None, "features": {}, "n": 0,
+                "reading": "seconda vista silenziosa (nessun pacchetto cognitivo)"}
+    feats: dict[str, float] = {}
+    intr = cognitive.get("intuition") or {}
+    conf = intr.get("confidence")
+    if isinstance(conf, (int, float)):
+        # A bullish gut informs fully; a bearish gut lowers the second sight.
+        seen, up = intr.get("seen"), intr.get("up")
+        bearish = isinstance(seen, int) and seen > 0 and isinstance(up, int) \
+            and up * 2 < seen
+        feats["intuition"] = float(conf) * (0.3 if bearish else 1.0)
+    theory = cognitive.get("theory") or {}
+    status = str(theory.get("status", ""))
+    if status:
+        feats["theory"] = {"supported": 1.0, "untested": 0.5,
+                           "weakening": 0.35, "falsified": 0.0}.get(status, 0.5)
+    sim = cognitive.get("simulation") or {}
+    if sim.get("fragile_points"):
+        covered = cognitive.get("covered")
+        if covered is not None:
+            feats["simulation"] = (len(set(covered) & set(sim["fragile_points"]))
+                                   / len(sim["fragile_points"]))
+        else:
+            feats["simulation"] = 0.5
+    emo = cognitive.get("emotion")
+    if emo:
+        from app.civilization import tongue as _tg
+        base = {"calm": 0.7, "excitement": 0.6, "disgust": 0.4, "fear": 0.2}.get(
+            str(emo), 0.5)
+        feats["emotion"] = base * _tg.MODALITY_WEIGHTS[_tg.FEEL]
+    if not feats:
+        return {"score": None, "features": {}, "n": 0,
+                "reading": "seconda vista silenziosa (nessun tratto misurato)"}
+    score = round(sum(feats.values()) / len(feats), 6)
+    return {"score": min(1.0, max(0.0, score)), "features": feats, "n": len(feats),
+            "reading": f"seconda vista: {score:.3f} su {len(feats)} tratto/i"}
 
 
 def score(
@@ -177,15 +251,21 @@ def score(
     weights: OracleWeights | None = None,
     domain_trust: dict[str, float] | None = None,
     seated_domains: set[str] | None = None,
+    cognitive: dict | None = None,
 ) -> OracleVerdict:
-    """Score one candidate: acolytes -> priests -> combiner -> the AOS."""
+    """Score one candidate: acolytes -> priests -> combiner -> the AOS.
+
+    C3 — when a ``cognitive`` package (the One Brain's view of this candidate) is
+    given, the AOS is blended with the Oracle's second sight over it.
+    """
     a_scores = score_acolytes(ctx)
     p_out = priest_outputs(a_scores, domain_trust, seated_domains)
-    aos, evidence, missing = combine(a_scores, p_out, weights)
+    aos, evidence, missing = combine(a_scores, p_out, weights, cognitive=cognitive)
     return OracleVerdict(
         aos=aos,
         acolyte_scores=a_scores,
         acolyte_missing=missing,
         priest_outputs=p_out,
         evidence=evidence,
+        second_sight=(second_sight(cognitive) if cognitive else None),
     )

@@ -15,6 +15,7 @@ is refused — the ledger is evidence, not decoration.
 from __future__ import annotations
 
 import json
+import statistics
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -27,6 +28,7 @@ __all__ = [
     "load",
     "render_last_days",
     "total_trials",
+    "measured_derating",
 ]
 
 # The three machines (R66). "vault" is the collector, not a compute island, but
@@ -153,6 +155,44 @@ def write_daily(records: list[FactoryRecord], path: str | Path) -> dict[str, dic
     return days
 
 
+def measured_derating(records: list[FactoryRecord]) -> dict:
+    """DEBT-034: the derating factor, MEASURED from real runs (never a guess).
+
+    The Army Ledger (R52) once derated a night's trials by a hardcoded ``0.7``
+    "for overhead" -- an arithmetic guess, never measured. The factory ledger now
+    carries real runs (``trials``, ``machine_seconds``), so the factor can be
+    computed: ``derating = median_trials_per_minute / best_trials_per_minute``.
+    The best observed throughput is the machine running with no slack (zero
+    per-run overhead); a slower run's ratio to it IS its overhead penalty. The
+    median across runs is the honest measured factor.
+
+    Honest: fewer than 2 timed records -> ``factor`` is ``None`` (one run cannot
+    separate throughput from overhead), never a fabricated number.
+    """
+    per_min = sorted(
+        float(r.trials) / (float(r.machine_seconds) / 60.0)
+        for r in records
+        if float(r.machine_seconds) > 0 and int(r.trials) > 0
+    )
+    if len(per_min) < 2:
+        return {"factor": None, "n": len(per_min), "best_trials_per_min": None,
+                "median_trials_per_min": None, "worst_trials_per_min": None,
+                "reading": (f"derating: non misurato ({len(per_min)} run "
+                            f"cronometrato, ne servono 2)")}
+    best = per_min[-1]
+    median = statistics.median(per_min)
+    factor = round(median / best, 4)
+    return {
+        "factor": factor, "n": len(per_min),
+        "best_trials_per_min": round(best, 1),
+        "median_trials_per_min": round(median, 1),
+        "worst_trials_per_min": round(per_min[0], 1),
+        "reading": (f"derating misurato: {factor:.3f} "
+                    f"(mediana {median:.0f} vs migliori {best:.0f} trial/min "
+                    f"su {len(per_min)} run)"),
+    }
+
+
 def render_last_days(records: list[FactoryRecord], days: int = 7) -> str:
     """A compact phone-readable summary of the last ``days`` days."""
     agg = aggregate_daily(records)
@@ -176,4 +216,6 @@ def render_last_days(records: list[FactoryRecord], days: int = 7) -> str:
     lines.append(
         f"  TOTAL       trials={grand_trials:>8}  hours={grand_hours:6.2f}"
     )
+    der = measured_derating(records)
+    lines.append(f"  DERATING    {der['reading']}")
     return "\n".join(lines)

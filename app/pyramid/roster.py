@@ -5,7 +5,7 @@ genomes that fill a role are drawn from the honest tournament, never declared.
 
     RANK 0 — THE ORACLE (1)             final confidence per candidate (AOS)
     RANK 1 — HIGH PRIESTS (4)           one per domain
-    RANK 2 — GENERALS (80)              15 active (one per pair) + 65 reserve
+    RANK 2 — GENERALS (80)              15 active (one per operational pair) + 65 reserve
     RANK 3 — SOLDIERS (210)             one live genome each
     RANK 4 — AVANT-GARDE (300)          exploration swarm (no live vote)
     RANK 5 — SPECTRE RESEARCHERS (105)  free-thinking corps (notes only)
@@ -15,11 +15,13 @@ genomes that fill a role are drawn from the honest tournament, never declared.
 THE ARITHMETIC ADJUSTMENT (documented, per the directive). The ranking text named
 "28 generals", but ``1 + 4 + 28 + 210 + 300 + 105 = 648`` — that is seven hundred
 minus 52. The directive says the number 700 is law and to adjust RESERVE duty to
-make it exact. So RANK 2 is 80: the 15 pairs are each commanded by one ACTIVE
-general (15), and 65 spares hold RESERVE duty (65). ``15 + 65 = 80``. 648 + 52 = 700.
+make it exact. So RANK 2 is 80: one ACTIVE general per pair and the rest hold
+RESERVE duty. THE STUDY-PAIR FIREWALL (Founding Charter) keeps the TRADE domain at
+15 operational pairs (the 15 study pairs are sensors only), so RANK 2 is 15 active
+(one per operational pair) + 65 reserve = 80. The 700 is unchanged.
 
 DOMAINS. The four domains are Trend, Mean-Reversion, Volatility, Liquidity. Every
-one of the 44 signal families is mapped to exactly one domain in :data:`DOMAIN_MAP`
+one of the 47 signal families is mapped to exactly one domain in :data:`DOMAIN_MAP`
 (validated at import, fail-closed — a missing or duplicated family is a loud error,
 never a default).
 
@@ -30,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.core.constellation import CONSTELLATION_PAIRS
+from app.core.constellation import OPERATIONAL_PAIRS
 from app.pyramid.doctrine import RESERVE_ROTATION_PERIOD
 from app.quant.genome import FAMILIES, StrategyGenome
 
@@ -93,8 +95,8 @@ RANK_NAMES: dict[int, str] = {
 
 PYRAMID_SIZE: int = 700
 
-ACTIVE_GENERALS: int = len(CONSTELLATION_PAIRS)   # 15 — one per pair
-RESERVE_GENERALS: int = RANK_COUNTS[GENERALS] - ACTIVE_GENERALS  # 65 — reserve duty
+ACTIVE_GENERALS: int = len(OPERATIONAL_PAIRS)   # one per OPERATIONAL pair (15; study pairs are sensors)
+RESERVE_GENERALS: int = RANK_COUNTS[GENERALS] - ACTIVE_GENERALS  # 50 — reserve duty
 
 
 def _validate_arithmetic() -> None:
@@ -169,6 +171,10 @@ DOMAIN_MAP: dict[str, str] = {
     "turtle_soup": "Liquidity",
     "engulfing_liquidity": "Liquidity",
     "volume_profile_v": "Liquidity",
+    # --- Machine learning (Mega Phase 2, Section D): learned models join the map ---
+    "ml_gradient_boosting": "Trend",
+    "ml_lstm_pattern": "Trend",
+    "ml_bayesian_regime": "Volatility",
 }
 
 
@@ -204,7 +210,7 @@ def domain_of(family: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pair -> domain, for generals. Every Constellation pair has one ACTIVE general
+# Pair -> domain, for generals. Every OPERATIONAL pair has one ACTIVE general
 # that owns its domain vote. The mapping is deterministic and sealed.
 # ---------------------------------------------------------------------------
 PAIR_DOMAIN: dict[str, str] = {
@@ -227,8 +233,8 @@ PAIR_DOMAIN: dict[str, str] = {
 
 
 def _validate_pair_domain() -> None:
-    if set(PAIR_DOMAIN) != set(CONSTELLATION_PAIRS):
-        raise ValueError("PAIR_DOMAIN must cover the Constellation exactly")
+    if set(PAIR_DOMAIN) != set(OPERATIONAL_PAIRS):
+        raise ValueError("PAIR_DOMAIN must cover the operational pairs exactly")
     for pair, domain in PAIR_DOMAIN.items():
         if domain not in DOMAINS:
             raise ValueError(f"pair {pair!r} maps to unknown domain {domain!r}")
@@ -312,17 +318,18 @@ def reserve_rotation(step: int, reserves: int = RESERVE_GENERALS) -> tuple[tuple
 
     Returns ``(reserve_seat, pair)`` pairs for a muster at ``step`` (the muster
     generation counter). Reserve seat ``s`` shadows pair
-    ``CONSTELLATION_PAIRS[(s + step) % 15]``: advancing ``step`` by one rotates
-    every reserve onto the next pair, so over :data:`RESERVE_ROTATION_PERIOD` steps
-    a reserve visits EVERY constellation pair exactly once. Every pair is thus
-    shadowed by roughly ``65/15`` reserves at all times — no uncovered territory,
-    and no reserve is ever decorative (each is bound to a real pair each step).
+    ``OPERATIONAL_PAIRS[(s + step) % len(OPERATIONAL_PAIRS)]``: advancing
+    ``step`` by one rotates every reserve onto the next pair, so over
+    :data:`RESERVE_ROTATION_PERIOD` steps a reserve visits EVERY operational pair
+    exactly once. Every pair is thus shadowed by roughly ``RESERVE_GENERALS/n``
+    reserves at all times — no uncovered territory, and no reserve is ever
+    decorative (each is bound to a real pair each step).
 
     The schedule is a pure function of ``step``: deterministic, reproducible, and
     sealed. Negative steps are normalized into the period so the schedule closes.
     """
-    n = len(CONSTELLATION_PAIRS)
-    order = [str(p) for p in CONSTELLATION_PAIRS]
+    n = len(OPERATIONAL_PAIRS)
+    order = [str(p) for p in OPERATIONAL_PAIRS]
     # Keep pair order canonical (as sealed) so the schedule is stable under dict
     # iteration order changes elsewhere.
     step_n = int(step) % n
@@ -334,12 +341,12 @@ def reserve_rotation(step: int, reserves: int = RESERVE_GENERALS) -> tuple[tuple
 
 
 def build_generals(
-    pairs: tuple[str, ...] = CONSTELLATION_PAIRS,
+    pairs: tuple[str, ...] = OPERATIONAL_PAIRS,
     reserves: int = RESERVE_GENERALS,
     *,
     step: int = 0,
 ) -> tuple[General, ...]:
-    """The 15 ACTIVE generals (one per pair) plus ``reserves`` on RESERVE duty.
+    """The 15 ACTIVE generals (one per operational pair) plus ``reserves`` on RESERVE duty.
 
     Active generals cover every pair exactly ONCE (no duplicate pair assignment).
     Reserves are placed on pairs by the sealed R26 rotation schedule
@@ -347,11 +354,11 @@ def build_generals(
     assignment, never a placeholder. Active duty remains ownership; reserve duty is
     rotation, and the ``duty`` field keeps the two unmistakable in every audit.
     """
-    if set(pairs) != set(CONSTELLATION_PAIRS):
-        raise ValueError("active generals must command exactly the Constellation")
+    if set(pairs) != set(OPERATIONAL_PAIRS):
+        raise ValueError("active generals must command exactly the operational pairs")
     active = [
         General(rank=GENERALS, seat=i, pair=pair, domain=PAIR_DOMAIN[pair], duty="active")
-        for i, pair in enumerate(CONSTELLATION_PAIRS)
+        for i, pair in enumerate(OPERATIONAL_PAIRS)
     ]
     rotation = reserve_rotation(step, reserves)
     reserve = [
@@ -381,7 +388,7 @@ def build_soldiers(
 
     Genomes are de-duplicated by signature (order preserved), so no genome holds
     two seats. Each soldier's domain comes from its family (sealed DOMAIN_MAP) and
-    its pair is assigned round-robin over the Constellation — deterministic and
+    its pair is assigned round-robin over the operational pairs — deterministic and
     balanced. Fewer genomes than ``cap`` is an HONEST shortfall: the seats beyond
     the muster are left VACANT and reported, never filled with a placeholder.
     """
@@ -395,7 +402,7 @@ def build_soldiers(
         seen.add(sig)
         if len(soldiers) >= cap:
             break
-        pair = CONSTELLATION_PAIRS[len(soldiers) % len(CONSTELLATION_PAIRS)]
+        pair = OPERATIONAL_PAIRS[len(soldiers) % len(OPERATIONAL_PAIRS)]
         soldiers.append(
             Soldier(
                 rank=SOLDIERS,
@@ -442,8 +449,8 @@ class PyramidRoster:
         return RANK_COUNTS[SOLDIERS] - len(self.soldiers)
 
     def reserve_duty(self) -> dict[str, int]:
-        """R26 — how many reserve officers shadow each constellation pair."""
-        out = {p: 0 for p in CONSTELLATION_PAIRS}
+        """R26 — how many reserve officers shadow each operational pair."""
+        out = {p: 0 for p in OPERATIONAL_PAIRS}
         for g in self.generals:
             if g.duty == "reserve":
                 out[g.pair] = out.get(g.pair, 0) + 1

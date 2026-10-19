@@ -10,9 +10,10 @@ breed a target below the 1:2.5 floor — the Constitution is encoded in the boun
 table, not merely enforced after the fact. Every mutable numeric gene appears in
 :data:`GENE_BOUNDS` exactly once.
 
-FAMILIES is the closed set of signal families. It includes ``"ensemble"`` and
-deliberately excludes machine-learning families (``ml_*``); learned models are a
-later phase and must not be smuggled in as a "family".
+FAMILIES is the closed set of signal families. It includes ``"ensemble"`` and,
+as of Mega Phase 2 (Section D), the three ``ml_*`` families (gradient boosting,
+LSTM pattern, Bayesian regime) — learned models are now first-class families,
+judged by the SAME gate stack and gauntlet as every hand-crafted family.
 """
 
 from __future__ import annotations
@@ -72,6 +73,20 @@ FAMILIES: tuple[str, ...] = (
     "hurst_reversion_filtered",
     "time_based_reversal",
     "ensemble",
+    # MACHINE-LEARNING families (Mega Phase 2, Section D — Lever 4). These were
+    # deliberately held out of the closed set until now: a learned model is a
+    # family like any other, judged by the SAME gate stack, the unseen gauntlet
+    # and the Wilson bound — no discounts for being "AI".
+    "ml_gradient_boosting",
+    "ml_lstm_pattern",
+    "ml_bayesian_regime",
+)
+
+# The ML families (consumed by the feature bridge + the ML registrations).
+ML_FAMILIES: tuple[str, ...] = (
+    "ml_gradient_boosting",
+    "ml_lstm_pattern",
+    "ml_bayesian_regime",
 )
 
 # Families that reason about relative value rather than a single series.
@@ -198,6 +213,12 @@ GENE_BOUNDS: tuple[GeneBound, ...] = (
     # The structural-level source the strategy derives stop/target geometry from.
     # Interval id into evaluator.LEVEL_SOURCES (clamped to the registry size).
     GeneBound("level_source_id", 0, 4, True),
+    # ML families (Mega Phase 2, Section D). These genes parameterize the
+    # lightweight learned models: the prediction horizon, the confidence floor a
+    # prediction must clear to become a signal, and a regularisation/decay knob.
+    GeneBound("ml_horizon", 1, 12, True),          # bars ahead the model predicts
+    GeneBound("ml_confidence", 0.5, 0.9, False),   # min directional probability
+    GeneBound("ml_decay", 0.1, 1.0, False),        # recency weighting / shrinkage
 )
 
 GENE_BOUNDS_BY_NAME: dict[str, GeneBound] = {b.name: b for b in GENE_BOUNDS}
@@ -292,6 +313,14 @@ class StrategyGenome:
     regime_adx_min: float = 20.0
     regime_atr_rank_min: float = 0.3
 
+    # JUMP 7 — THE MULTI-LAYER STRATEGY: the coordination stack (strategic D1 ->
+    # tactical H4 -> execution M15). Each layer is a dict {role, timeframe, family,
+    # gate, direction}; the stack compiles DOWN to the existing signal+gate model
+    # (see app.civilization.layers). EMPTY = a FLAT strategy (the classic genome).
+    # Not a numeric gene, so it stays out of GENE_BOUNDS; it IS part of the DNA
+    # (it enters the signature), so two stacks with different coordination differ.
+    layers: tuple[dict, ...] = ()
+
     # SMC / ICT structure genes (Phase 2.2b)
     smc_pivot_strength: int = 2
     smc_range_lookback: int = 100
@@ -336,6 +365,15 @@ class StrategyGenome:
     london_hours: int = 3
     hikkake_lookback: int = 6
 
+    # ML family genes (Mega Phase 2, Section D). The default confidence is 0.55,
+    # MEASURED on the EURUSD anchor census: the gradient-boosting stump ensemble
+    # clears a 0.60 floor on only 19 bars (sniper-thin, and it MISSES the anchor's
+    # >=50 build-soundness fence) but fires 322 bars at 0.55 — enough to be
+    # evaluated. LSTM fires 4047 and the Bayesian regime 29552 at the same floor.
+    ml_horizon: int = 4
+    ml_confidence: float = 0.55
+    ml_decay: float = 0.9
+
     def __post_init__(self):
         if self.family not in FAMILIES:
             raise ValueError(f"unknown family {self.family!r}")
@@ -348,6 +386,8 @@ class StrategyGenome:
             value = getattr(self, f.name)
             if f.name == "ensemble_members":
                 out[f.name] = [dict(m) for m in value]
+            elif f.name == "layers":
+                out[f.name] = [dict(l) for l in value]
             else:
                 out[f.name] = value
         return out
@@ -362,6 +402,8 @@ class StrategyGenome:
                 continue  # unknown keys ignored safely
             if key == "ensemble_members":
                 kwargs[key] = tuple(dict(m) for m in (value or ()))
+            elif key == "layers":
+                kwargs[key] = tuple(dict(l) for l in (value or ()))
             elif key == "family":
                 kwargs[key] = value if value in FAMILIES else "trend_pullback"
             elif key == "ensemble_source":
@@ -381,7 +423,7 @@ class StrategyGenome:
         """
         payload = {"family": self.family}
         for f in fields(self):
-            if f.name in ("ensemble_members", "ensemble_source"):
+            if f.name in ("ensemble_members", "ensemble_source", "layers"):
                 continue  # R58: members fold in below; source is provenance, not DNA
             payload[f.name] = getattr(self, f.name)
         if self.ensemble_members:
@@ -389,6 +431,13 @@ class StrategyGenome:
                 StrategyGenome.from_dict(m).signature() for m in self.ensemble_members
             )
             payload["ensemble_member_signatures"] = member_sigs
+        if self.layers:
+            # JUMP 7 — the coordination stack is DNA: two stacks that coordinate
+            # differently are different strategies, so they must not collide.
+            payload["layers"] = [
+                [l.get("role"), l.get("timeframe"), l.get("family"),
+                 l.get("gate"), l.get("direction")] for l in self.layers
+            ]
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:16]
 

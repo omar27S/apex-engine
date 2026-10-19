@@ -22,6 +22,7 @@ slippage charge on a COPY. Pure; the only "I/O" is in-memory evaluation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -280,6 +281,7 @@ def rams_evaluate(
     eval_config=None,
     seed: int | None = None,
     adversarial: tuple | None = None,
+    cage_masks: Mapping[str, tuple] | None = None,
 ) -> RAMSReport:
     """Judge ``genome`` clean and adversarial; return the delta and the verdict.
 
@@ -289,9 +291,19 @@ def rams_evaluate(
     layers the R36 dynamic slippage. ``adversarial`` may be a precomputed
     ``(adv_universe, logs)`` from :func:`adversarial_frames` so a batch run wounds
     the tape ONCE and reuses it. Fail-closed on an empty universe.
+
+    ``cage_masks`` (optional) injects a self-written body's ``(long, short, {})``
+    masks per pair through the SAME engine, stop geometry, costs and gate stack —
+    the Phase-4a cage path (R32). It is additive: the sealed genome dispatch is
+    unchanged for every broadcast family. RAMS' gap/whipsaw sabotage is a TAPE
+    transform (``open``/``high``/``low`` shift, row identity and hence the masks
+    are preserved), so one mask set serves both the clean and the adversarial
+    world exactly as the shared-signal invariant (R39) requires.
     """
     if not frames:
         raise ValueError("rams_evaluate needs a non-empty universe (fail-closed)")
+
+    signals_by_pair = dict(cage_masks) if cage_masks else {}
 
     clean_cfg = eval_config or ev.EvaluationConfig()
     adv_cfg = ev.EvaluationConfig(
@@ -303,7 +315,8 @@ def rams_evaluate(
     )
 
     clean_report = ev.evaluate(
-        genome, frames, clean_cfg, statarb_z_by_pair=_statarb_map(genome, frames)
+        genome, frames, clean_cfg, statarb_z_by_pair=_statarb_map(genome, frames),
+        signals_by_pair=signals_by_pair,
     )
     if adversarial is not None:
         adv_universe, logs = adversarial
@@ -312,6 +325,7 @@ def rams_evaluate(
     adv_report = ev.evaluate(
         genome, adv_universe, adv_cfg,
         statarb_z_by_pair=_statarb_map(genome, adv_universe),
+        signals_by_pair=signals_by_pair,
     )
     # Fail-closed R38: zero trades in EITHER world is not a survivability claim.
     # (The relative-value family needs its cross-pair z, supplied above; a
@@ -496,6 +510,7 @@ def survivability_verdict_multi(
     *,
     seeds: tuple[int, ...] = (0, 1, 2),
     eval_config=None,
+    cage_masks: Mapping[str, tuple] | None = None,
 ) -> MultiSeedVerdict:
     """R40 — run the adversarial world once PER SEED and rule by majority.
 
@@ -521,7 +536,8 @@ def survivability_verdict_multi(
     worst_p99 = float("inf")
 
     for s in seeds:
-        rep = rams_evaluate(genome, frames, config, eval_config=eval_config, seed=s)
+        rep = rams_evaluate(genome, frames, config, eval_config=eval_config, seed=s,
+                            cage_masks=cage_masks)
         v = rep.verdict
         keys = list(v.get("failed_keys", []))
         # `no_trades` is a fail-closed non-survival, not a pass.
@@ -597,6 +613,7 @@ def gauntlet_row(
     seen_seeds: tuple[int, ...] = (0, 1, 2),
     unseen_seeds: tuple[int, ...] = (7, 11, 13),
     eval_config=None,
+    cage_masks: Mapping[str, tuple] | None = None,
 ) -> dict:
     """R45+R46 (Phase 6b/6c) — one finalist's FULL-GAUNTLET row.
 
@@ -612,9 +629,11 @@ def gauntlet_row(
     mirror the UNSEEN verdict (the crown gate).
     """
     seen = survivability_verdict_multi(
-        genome, frames, config, seeds=seen_seeds, eval_config=eval_config)
+        genome, frames, config, seeds=seen_seeds, eval_config=eval_config,
+        cage_masks=cage_masks)
     unseen = survivability_verdict_multi(
-        genome, frames, config, seeds=unseen_seeds, eval_config=eval_config)
+        genome, frames, config, seeds=unseen_seeds, eval_config=eval_config,
+        cage_masks=cage_masks)
     net_rs = [float(r.get("adv_net_r", 0.0)) for r in unseen.per_seed.values()]
     trades = [int(r.get("adv_trades", 0)) for r in unseen.per_seed.values()]
     failed_keys = sorted({k for r in unseen.per_seed.values()

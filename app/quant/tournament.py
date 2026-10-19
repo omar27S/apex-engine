@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 
+from app.core import law
 from app.quant import breeding, costs, fitness, statarb, vault
 from app.quant import cost_report, death_ledger, evaluator
 from app.quant.evaluator import (
@@ -66,6 +67,7 @@ __all__ = [
     "ensemble_manifest_digest",
     "ensemble_survival_table",
     "ENSEMBLE_SURVIVAL_COLUMNS",
+    "ensemble_verdict",
 ]
 
 CHECKPOINT_PATH = "data/history/.tournament_state.json"
@@ -133,6 +135,51 @@ def ensemble_survival_table(trials_by_arm: dict, survivors_by_arm: dict,
             "unseen_pass_rate": rate,
         })
     return rows
+
+
+# DEBT-040 — R58 (elite soup) graduation: the hypothesis, adjudicated from data.
+# The claim: ensembling from the elite pool beats single strategies. The verdict is
+# read from the survival history (survivor rate per arm), never from plausibility.
+VERDICT_MIN_TRIALS: int = 30
+
+
+def ensemble_verdict(nights: list[list[dict]]) -> dict:
+    """DEBT-040 — adjudicate R58 (elite soup) from the REAL survival history.
+
+    Aggregates each arm's ``survivors``/``trials`` across every night and compares
+    the ELITE survivor rate against the SINGLE survivor rate. The claim "elite soup
+    beats singles" is ``supported`` when the elite rate is at least the single rate,
+    ``refuted`` when it is below it, and ``inconclusive`` when an arm never reached
+    ``VERDICT_MIN_TRIALS`` (never a fabricated verdict).
+    """
+    agg: dict[str, dict] = {}
+    for night in (nights or []):
+        for row in (night or []):
+            arm = row.get("arm")
+            if arm not in SURVIVAL_ARMS:
+                continue
+            a = agg.setdefault(arm, {"trials": 0, "survivors": 0})
+            a["trials"] += int(row.get("trials") or 0)
+            a["survivors"] += int(row.get("survivors") or 0)
+    if not agg:
+        return {"verdict": "inconclusive", "elite_rate": None, "single_rate": None,
+                "elite_trials": 0, "single_trials": 0,
+                "reading": "R58 (zuppa d'elite): nessuna storia -- inconcludente"}
+    el = agg.get("ensemble_elite", {"trials": 0, "survivors": 0})
+    sg = agg.get("single", {"trials": 0, "survivors": 0})
+    if el["trials"] < VERDICT_MIN_TRIALS or sg["trials"] < VERDICT_MIN_TRIALS:
+        return {"verdict": "inconclusive", "elite_rate": None, "single_rate": None,
+                "elite_trials": el["trials"], "single_trials": sg["trials"],
+                "reading": (f"R58 (zuppa d'elite): troppi pochi trial "
+                            f"(elite {el['trials']}, single {sg['trials']}) -- inconcludente")}
+    er = el["survivors"] / el["trials"]
+    sr = sg["survivors"] / sg["trials"]
+    verdict = "supported" if er >= sr else "refuted"
+    return {"verdict": verdict, "elite_rate": round(er, 5), "single_rate": round(sr, 5),
+            "elite_trials": el["trials"], "single_trials": sg["trials"],
+            "reading": (f"R58 (zuppa d'elite): {'CONFERMATA' if verdict == 'supported' else 'REFUTATA'}"
+                        f" -- elite sopravvive {er:.2%}, single {sr:.2%} "
+                        f"({el['trials']} vs {sg['trials']} trial)")}
 
 # R39 (Phase 6a) — DUAL SELECTION. The manifest names every parameter that shapes
 # the dual world; its digest is hash-pinned in tests/quant/test_tournament.py. A
@@ -926,6 +973,23 @@ def run(
             "gross_r": f.gross_r,  # DIAGNOSTIC ONLY (R17)
             "max_drawdown_r": f.max_drawdown_r, "trades": f.trades,
             "autopsy_resilience": f.autopsy_resilience,  # R39 tiebreak
+            # THE FULL FEEDING — the fields the Letter's table reads, carried on every
+            # row so the report → statistics → Letter chain never drops a measured
+            # number (profit factor, the per-trade expectancy, the realized DD).
+            "profit_factor": f.profit_factor,
+            "expectancy_r": (round(f.net_r / f.trades, 4) if f.trades else None),
+            "measured_dd_r": f.max_drawdown_r,
+            "gross_profit_r": f.gross_profit_r,
+            "gross_loss_r": f.gross_loss_r,
+            "wins": f.wins,
+            "losses": max(0, f.trades - f.wins),
+            # R85 — THE GROSS-TO-FRICTION GATE's own arithmetic, carried per row so
+            # the Letter's "Frizione media (x)" reads the REAL paid multiple (the
+            # gross edge per unit of friction), never a fabricated number.
+            "friction_breakdown": law.friction_breakdown(f.gross_r, f.net_r),
+            # The reward:risk the genome actually TRADES (the law's floor is 2.5).
+            # Carried so the bulletin's RR can read a real R:R, never net-R/trade.
+            "target_rr": getattr(g, "target_rr", None),
         }
         if dual:
             clean = final_clean.get(sig)

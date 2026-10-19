@@ -12,6 +12,7 @@ from __future__ import annotations
 from app.core.constellation import (
     CONSTELLATION_PAIRS,
     CORE_CROSS_PAIRS,
+    EXPANDED_CROSS_PAIRS,
     MAJOR_PAIRS,
     PAIR_GALAXY as _MEMBERSHIP_GALAXY,
 )
@@ -20,6 +21,7 @@ from app.core.law import normalize_pair
 # Re-exported for callers; membership is defined once in app.core.constellation.
 MAJORS = MAJOR_PAIRS
 CORE_CROSSES = CORE_CROSS_PAIRS
+EXPANDED_CROSSES = EXPANDED_CROSS_PAIRS
 
 # Single pip convention: JPY quotes use two decimals, everything else four.
 PIP_STANDARD = 0.0001

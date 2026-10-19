@@ -41,6 +41,46 @@ def _load_config(path: str | None) -> dict:
     return obj
 
 
+def _load_directed(path: str | None) -> tuple:
+    """Load the Dragon's directed-mutation hypotheses (honest: absent -> empty).
+
+    The artifact is committed by the night shift (``directed_mutations.json``); a
+    missing or unreadable file yields ``()`` so the factory evolves blind as before.
+    """
+    if not path:
+        return ()
+    p = Path(path)
+    if not p.exists():
+        return ()
+    try:
+        payload = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return ()
+    hyps = payload.get("hypotheses") if isinstance(payload, dict) else None
+    return tuple(hyps or ())
+
+
+def _load_gating(state_path: str | None) -> dict:
+    """DEBT-060 — read the Watchtower's regime gating from the civilization state.
+
+    The state's ``regime.gating`` is ``pair -> {"paused": [group], "active": [group]}``.
+    Honest: a missing/unreadable state (or no gating) yields ``{}`` so the factory
+    evolves ungated -- exactly as before the Watchtower reconfigured anything.
+    """
+    if not state_path:
+        return {}
+    p = Path(state_path)
+    if not p.exists():
+        return {}
+    try:
+        payload = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    gating = ((payload.get("regime") or {}).get("gating")
+              if isinstance(payload, dict) else None)
+    return dict(gating) if isinstance(gating, dict) else {}
+
+
 def _load_universe(data_dir: str, pairs: list[str], rows: int) -> dict:
     universe = {}
     for pair in pairs:
@@ -78,13 +118,21 @@ def main(argv=None) -> int:
     ap.add_argument("--island", default=cfg.get("island", "heart"))
     ap.add_argument("--screen-pair", default=cfg.get("screen_pair", ""))
     ap.add_argument("--out", default=cfg.get("out", "data/history/.factory_run.json"))
-    ap.add_argument("--ledger", default=cfg.get("ledger", "factory_ledger.jsonl"))
     ap.add_argument("--no-polish", dest="polish", action="store_false",
                     default=bool(cfg.get("polish", True)))
     ap.add_argument("--no-cma", dest="cma", action="store_false",
                     default=bool(cfg.get("cma", True)))
     ap.add_argument("--no-staircase", dest="staircase", action="store_false",
                     default=bool(cfg.get("staircase", True)))
+    ap.add_argument("--directed", default=cfg.get("directed", "directed_mutations.json"),
+                    help="THE DRAGON's directed-mutation hypotheses (absent -> blind)")
+    ap.add_argument("--state", default=cfg.get("state", "civilization_state.json"),
+                    help="DEBT-060: the state whose regime.gating the factory honours")
+    ap.add_argument("--layers-quota", type=float,
+                    default=float(cfg.get("layers_quota", 0.0)),
+                    help="JUMP 7: the multi-layer population share")
+    ap.add_argument("--ledger", default=cfg.get("ledger", "factory_ledger.jsonl"),
+                    help="R66: the honest band ledger this run appends to")
     args = ap.parse_args(argv)
 
     pairs = [p.strip() for p in args.pairs.split(",") if p.strip()]
@@ -95,12 +143,16 @@ def main(argv=None) -> int:
 
     cfg_obj = FactoryConfig(
         pairs=tuple(sorted(universe)),
+        directed=_load_directed(args.directed),
+        regime_gating=_load_gating(args.state),
+        layers_quota=args.layers_quota,
         population=args.population, generations=args.generations, elite=args.elite,
         min_trades=args.min_trades, seed=args.seed,
         ensemble_quota=args.ensemble_quota, n_slices=args.n_slices,
         slice_salt=args.slice_salt, polish=bool(args.polish), cma=bool(args.cma),
         staircase=bool(args.staircase), screen_pair=args.screen_pair,
         island=args.island,
+        rotate_seed=bool(cfg.get("rotate_seed", False)),
     )
     report = run_factory(universe, cfg_obj)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -115,7 +167,9 @@ def main(argv=None) -> int:
         cache_hits=int(report["result_memory"]["hits"]),
         cache_misses=int(report["result_memory"]["misses"]),
         realms_occupied=int(report["realms"]["occupied"]),
-        note=f"pairs={len(universe)} pop={args.population}",
+        note=(f"pairs={len(universe)} pop={args.population}"
+              f" seed={report.get('seed')}"
+              f" champ={report.get('champions_injected', 0)}"),
     )
     ledger_mod.append([], rec, args.ledger)
 
@@ -127,6 +181,8 @@ def main(argv=None) -> int:
         "result_memory": report["result_memory"],
         "polish": report["polish"],
         "cma_refined": report["cma"]["refined"],
+        "directed": report.get("directed"),
+        "regime_gating": report.get("regime_gating"),
         "entropy_trend": report["entropy_trend"],
         "realms": {"occupied": report["realms"]["occupied"],
                    "by_family_group": report["realms"]["by_family_group"]},

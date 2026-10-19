@@ -39,17 +39,17 @@ SACRED_FILES: tuple[str, ...] = (
 # The pinned SHA-256 of each sacred file, in the same order as SACRED_FILES.
 SACRED_HASHES: dict[str, str] = {
     "app/core/law.py":
-        "c37a791632a3fd75771aab21ed995d9e935c1acc32bb8f3eaa2622e51a20a885",
+        "e329cf0a89a662bfaccb6a8c2ca92407da8692c5f69f1745735143f8bdb009c2",
     "app/core/pairs.py":
-        "3ecd3ebe1f19924c3f9c2f22987e06ffcc3cfd29d6a7bb62b582db508b54ced0",
+        "2377fdaba446cd371b0dad1a6e850b95771bdab6e6a1dea8e4c3238effd7d485",
     "app/core/tick_value.py":
         "17073218c2ace207ef74b3c04c72df7b5594f272fe73dd244b54d869a8bccced",
     "app/core/rate_oracle.py":
-        "a5a60a56b28b95ea2130543bc8d86faa390896aa4820387cb8ebd1873e59332e",
+        "47ffc818fc294f71f93da5942c7ed7953da020c9798f03a7696018a75e6b2fb4",
     "app/core/data.py":
         "bb57626afa2983c9007eea82dd078c98ab2a03c73d0e7619b4c6aa5a2e15aaf8",
     "app/quant/costs.py":
-        "d0d33949568d8cf4f4948850686b4fe23b58ea268dc6554c8bc06e19b98ad3c7",
+        "fb588c28d1eae05d0564281cfb4f658e2a309931e9930ddebddc481ba624e642",
 }
 
 

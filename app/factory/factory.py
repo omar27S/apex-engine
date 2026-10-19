@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -39,7 +40,8 @@ from app.quant import breeding
 from app.quant import costs
 from app.quant import evaluator as ev
 from app.quant import fitness as fitness_mod
-from app.quant.genome import StrategyGenome
+from app.quant import tribunal
+from app.quant.genome import GENE_BOUNDS, GENE_BOUNDS_BY_NAME, StrategyGenome
 from app.factory import eda as eda_mod
 from app.factory import entropy as entropy_mod
 from app.factory import islands as islands_mod
@@ -62,6 +64,7 @@ class FactoryConfig:
     elite: int = 40
     min_trades: int = 30
     seed: int = 0
+    rotate_seed: bool = False
     ensemble_quota: float = 0.25
     n_slices: int = 3
     slice_salt: str = ""
@@ -73,6 +76,20 @@ class FactoryConfig:
     # The stairstep's cheap pair for round 1 (must be in the universe).
     screen_pair: str = ""
     island: str = "heart"
+    # THE DRAGON'S DIRECTED MUTATIONS (the dominant intelligence guides evolution):
+    # a tuple of ``{family, gene, direction, reason}`` hypotheses that nudge the
+    # surviving genomes toward a chosen bound. Empty -> blind evolution as before.
+    directed: tuple = ()
+    # DEBT-060 — THE REGIME GATING (the Watchtower's reconfiguration, honoured).
+    # A map ``pair -> {"paused": [family_group,...], "active": [family_group,...]}``
+    # read from the civilization state's ``regime.gating``. A family in a pair's
+    # PAUSED set loses its population slots on that pair; a family in the ACTIVE set
+    # is PRIORITISED. Empty (or a pair with no entry) -> no gating, as before, so the
+    # factory is byte-identical when the Watchtower has not reconfigured anything.
+    regime_gating: dict = field(default_factory=dict)
+    # JUMP 7 — the multi-layer quota: the share of the population that draws a
+    # coordination stack (strategic D1 + tactical H4 above the execution M15).
+    layers_quota: float = 0.0
 
     def signature(self) -> str:
         blob = json.dumps(
@@ -83,6 +100,8 @@ class FactoryConfig:
                 "ensemble_quota": self.ensemble_quota, "n_slices": self.n_slices,
                 "slice_salt": self.slice_salt, "polish": self.polish,
                 "cma": self.cma, "staircase": self.staircase,
+                "layers_quota": self.layers_quota,
+                "regime_gating": self.regime_gating,
             },
             sort_keys=True, default=str,
         )
@@ -138,6 +157,133 @@ def _make_staircase(pairs, screen_pair, evaluator: _Evaluator):
     return {"screen": screen, "era": era, "gauntlet": gauntlet}
 
 
+def _directed_index(directed) -> dict:
+    """Map ``(family, gene) -> direction`` from the Dragon's hypotheses (last wins)."""
+    idx: dict = {}
+    for h in directed or ():
+        if not isinstance(h, dict):
+            continue
+        fam = str(h.get("family") or "").strip()
+        gene = str(h.get("gene") or "").strip()
+        direction = str(h.get("direction") or "").strip().lower()
+        if fam and gene in GENE_BOUNDS_BY_NAME and direction in ("up", "down"):
+            idx[(fam, gene)] = direction
+    return idx
+
+
+def _directed_genes(genome: StrategyGenome, idx: dict):
+    """The genome's genes nudged per the Dragon's directed hypotheses.
+
+    A nudge moves the gene 30% of the way from its current value toward the bound
+    named by ``direction`` (``up`` -> high, ``down`` -> low), clamped INSIDE the
+    family's effective bound -- a directed mutation is a step in a chosen
+    direction, never a teleport, and the law is never broken. Returns ``(genes,
+    n)`` where ``n`` is the number of genes actually nudged; an absent directive
+    yields ``n=0`` (the caller leaves the genome untouched, honest).
+    """
+    fam = genome.family
+    genes = {b.name: getattr(genome, b.name) for b in GENE_BOUNDS}
+    n = 0
+    for (hfam, gene), direction in idx.items():
+        if hfam != fam:
+            continue
+        low, high, is_int = tribunal.effective_bounds(fam, gene)
+        cur = float(genes[gene])
+        target = high if direction == "up" else low
+        moved = cur + 0.30 * (target - cur)
+        moved = min(max(moved, low), high)
+        genes[gene] = int(round(moved)) if is_int else float(moved)
+        n += 1
+    return genes, n
+
+
+# --- DEBT-060: the factory HONOURS the regime gating -----------------------
+
+# The soft boost for an ACTIVE family group: with this probability a draw outside the
+# active set is redrawn (a priority, not a hard block -- a paused group is the only
+# hard exclusion). Named so the report and the draw can never drift apart.
+ACTIVE_BOOST = 0.5
+
+
+def _group_of(family: str) -> str:
+    """The coarse family group a genome's family belongs to (the gating's key).
+
+    Reuses ``app.factory.realms`` (single source of truth, Scar #2): the
+    Watchtower's gating names FAMILY GROUPS (trend/momentum/...), the same partition
+    the realm census uses. An unknown family reports ``unknown`` (never a guess).
+    """
+    return realms_mod.family_group(str(family))
+
+
+def _paused_groups(config: FactoryConfig) -> set[str]:
+    """The family groups PAUSED across every gated pair (the union)."""
+    out: set[str] = set()
+    for _pair, g in (config.regime_gating or {}).items():
+        for grp in ((g or {}).get("paused") or []):
+            out.add(str(grp))
+    return out
+
+
+def _active_groups(config: FactoryConfig) -> set[str]:
+    """The family groups BOOSTED across every gated pair (the union)."""
+    out: set[str] = set()
+    for _pair, g in (config.regime_gating or {}).items():
+        for grp in ((g or {}).get("active") or []):
+            out.add(str(grp))
+    return out
+
+
+def _draw_gated(config: FactoryConfig, rng, *, concrete: bool):
+    """Draw a genome whose family respects the regime gating (DEBT-060).
+
+    Paused groups are REJECTED and redrawn (bounded retries, then a best-effort draw
+    -- never an infinite loop); active groups are drawn FIRST with probability
+    ``ACTIVE_BOOST``. Honest: with no gating this is exactly the ungated draw, so the
+    classic path is byte-identical (the retry never fires).
+    """
+    paused = _paused_groups(config)
+    active = _active_groups(config)
+    if not paused and not active:
+        return breeding.random_genome(
+            rng, concrete=concrete, ensemble_quota=config.ensemble_quota,
+            layers_quota=config.layers_quota)
+    for _ in range(20):
+        g = breeding.random_genome(
+            rng, concrete=concrete, ensemble_quota=config.ensemble_quota,
+            layers_quota=config.layers_quota)
+        grp = _group_of(g.family)
+        if grp in paused:
+            continue  # paused on some pair -- redraw
+        if active and grp not in active and rng.random() < ACTIVE_BOOST:
+            continue  # prioritise active groups (a soft boost, not a hard block)
+        return g
+    return breeding.random_genome(
+        rng, concrete=concrete, ensemble_quota=config.ensemble_quota,
+        layers_quota=config.layers_quota)
+
+
+def _gating_block(config: FactoryConfig, population) -> dict:
+    """The honest gating report: paused/active groups + the population's respect."""
+    paused = _paused_groups(config)
+    active = _active_groups(config)
+    if not config.regime_gating:
+        return {"applied": False, "paused": [], "active": [],
+                "n_paused_offered": 0, "n_active_offered": 0, "pairs": 0,
+                "reading": "nessun gating di regime (la torre non ha riconfigurato)"}
+    offered = [g for g in population]
+    n_paused = sum(1 for g in offered if _group_of(g.family) in paused)
+    n_active = sum(1 for g in offered if _group_of(g.family) in active)
+    return {
+        "applied": True, "paused": sorted(paused), "active": sorted(active),
+        "pairs": len(config.regime_gating),
+        "n_paused_offered": n_paused, "n_active_offered": n_active,
+        "n_population": len(offered),
+        "reading": (f"il gating del regime e' onorato: {n_paused} genomi di gruppi "
+                    f"in pausa su {len(offered)} (gruppi attivi prioritizzati: "
+                    f"{sorted(active)})"),
+    }
+
+
 def run_factory(universe, config: FactoryConfig, *,
                 clock=time.monotonic) -> dict:
     """Run the factory's bounded reproductive loop and return the honest report."""
@@ -145,24 +291,63 @@ def run_factory(universe, config: FactoryConfig, *,
     pairs = tuple(sorted(p for p in config.pairs if p in universe))
     if not pairs:
         raise ValueError("no pairs from the config are in the universe (fail-closed)")
-    rng = np.random.default_rng(config.seed)
+    # R92 -- THE ROTATING SEED: a fixed seed redrew the SAME evolution every
+    # shift (four identical ledger rows during the flatline). When the config
+    # opts in, the seed rotates with the ledger's length: deterministic PER
+    # SHIFT (each shift is exactly reproducible from its recorded seed, in the
+    # ledger note), never repeated across shifts.
+    shift_seed = config.seed
+    if config.rotate_seed:
+        try:
+            _ll = Path("factory_ledger.jsonl")
+            _n = sum(1 for _ in _ll.open()) if _ll.exists() else 0
+        except OSError:
+            _n = 0
+        shift_seed = (config.seed + 7919 * (_n + 1)) % (1 << 30)
+    rng = np.random.default_rng(shift_seed)
     memory = rm_mod.ResultMemory()
     evaluator = _Evaluator(universe, config.min_trades, memory)
     eda_mem = eda_mod.GeneMemory()
     staircase = _make_staircase(pairs, config.screen_pair, evaluator)
 
     slice_set = slices_mod.make_slices(
-        pairs, min(config.n_slices, len(pairs)), config.seed, config.slice_salt)
+        pairs, min(config.n_slices, len(pairs)), shift_seed, config.slice_salt)
 
     cheap_pairs = (config.screen_pair,) if config.screen_pair else (pairs[0],)
 
     def _new_genome():
-        return breeding.random_genome(rng, ensemble_quota=config.ensemble_quota)
+        return _draw_gated(config, rng, concrete=False)
 
     # --- generation 0: random + Lamarckian polish (R71c) -------------------
     population: list[StrategyGenome] = []
+    # R91 -- THE PERSISTENT CHAMPIONS: this island's previous champions re-enter
+    # generation 0 (re-evaluated on TONIGHT's slices -- the result memory makes
+    # their re-scoring nearly free). Evolution ACCUMULATES instead of restarting
+    # blind every shift (the identical-ledger flatline fix). Fail-open: a
+    # missing/corrupt file simply means a fresh random start, as before.
+    try:
+        _cf = Path(f"factory_champions_{config.island}.json")
+        _mig = json.loads(_cf.read_text()) if _cf.exists() else {}
+        _pool = (_mig.get("migrants") or _mig.get("champions") or [])
+        champions_in = [StrategyGenome.from_dict(m["genome"])
+                        for m in _pool if m.get("genome")]
+    except (OSError, ValueError, TypeError, KeyError):
+        champions_in = []
+    champions_injected = 0
+    champions_in = champions_in[:max(0, config.population // 4)]
     polish_deltas: list[dict] = []
+    # THE DRAGON'S DIRECTED MUTATIONS: the committed hypotheses, indexed by family
+    # and gene. An empty directive set is a no-op (blind evolution, as before).
+    directed_idx = _directed_index(config.directed)
+    directed_stats = {"nudged": 0, "genes": sorted(
+        {f"{f}:{g}" for (f, g) in directed_idx})}
     for _ in range(config.population):
+        if champions_in:
+            # R91 -- a champion enters generation 0 unpolished (it arrives
+            # already refined) and is re-scored honestly on tonight's slices.
+            population.append(champions_in.pop(0))
+            champions_injected += 1
+            continue
         g = _new_genome()
         if config.polish:
             def objective(cand):
@@ -270,6 +455,14 @@ def run_factory(universe, config: FactoryConfig, *,
                     if drawn is not None:
                         genes[gene] = drawn
                         moved = True
+            # THE DRAGON'S DIRECTED MUTATIONS: nudge the child's genes toward the
+            # bound the dominant intelligence named (no directive -> no change).
+            d_genes, d_n = _directed_genes(child, directed_idx)
+            if d_n:
+                for k in d_genes:
+                    genes[k] = d_genes[k]
+                moved = True
+                directed_stats["nudged"] += d_n
             children.append(StrategyGenome.from_dict(genes) if moved else child)
         scored = _evaluate_pool(children)
 
@@ -309,6 +502,15 @@ def run_factory(universe, config: FactoryConfig, *,
         migration = {"exported": False,
                      "reason": "no realm champion cleared the rank floor"}
 
+    # R91 -- persist this shift's champions for the NEXT shift's generation 0
+    # (the evolution's memory; committed like the ledger it grows beside).
+    if champions:
+        try:
+            Path(f"factory_champions_{config.island}.json").write_text(
+                json.dumps(migration, indent=2, default=str))
+        except (OSError, TypeError, ValueError):
+            pass
+
     wall = clock() - start
     # Honest machine-work: EVERY evaluation performed (polish + screen + full +
     # CMA), which is exactly the result memory's miss count. ``genomes_scored``
@@ -318,7 +520,8 @@ def run_factory(universe, config: FactoryConfig, *,
         "phase": 7,
         "kind": "factory_run",
         "config_hash": config.signature(),
-        "seed": config.seed,
+        "seed": shift_seed,
+        "champions_injected": champions_injected,
         "island": config.island,
         "pairs": list(pairs),
         "population": config.population,
@@ -336,6 +539,9 @@ def run_factory(universe, config: FactoryConfig, *,
         "result_memory": memory.stats(),
         "eda_memory": {"families_learned": len(eda_mem.snapshot()),
                        "snapshot": eda_mem.snapshot()},
+        "directed": {**directed_stats,
+                     "n_directives": len(directed_idx)},
+        "regime_gating": _gating_block(config, population),
         "polish": {
             "newborns": len(polish_deltas),
             "improved": sum(1 for d in polish_deltas if d["delta"] > 0),

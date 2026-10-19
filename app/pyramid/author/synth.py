@@ -74,6 +74,11 @@ def _series_leaf(rng) -> g.Node:
     # --- R87 (Phase 7j) patience series leaf --------------------------------
     if k == "bars_since_range":
         return g.node(k, (int(rng.integers(10, 200)),))
+    # --- R89 (Phase 7k) gross-edge series leaves ----------------------------
+    if k == "vol_displacement":
+        return g.node(k, (int(rng.integers(8, 240)),))
+    if k == "pullback_depth":
+        return g.node(k, (int(rng.integers(12, 200)),))
     raise g.GrammarError(f"no draw rule for series leaf {k!r}")
 
 
@@ -153,7 +158,12 @@ def _bool(rng, depth: int) -> g.Node:
     if r < 0.975:
         return g.node("min_gap_bars", (int(rng.integers(2, 24)),),
                       (_bool(rng, depth - 1),))
-    if r < 0.985:
+    # --- R89 (Phase 7k) gross-edge bool node --------------------------------
+    if r < 0.982:
+        return g.node("session_boundary_reversal",
+                      (float(round(rng.uniform(1.0, 3.0), 2)),),
+                      (_series(rng, depth - 1),))
+    if r < 0.99:
         return g.node("not", (), (_bool(rng, depth - 1),))
     combinator = "and" if rng.random() < 0.5 else "or"
     return g.node(combinator, (), (_bool(rng, depth - 1), _bool(rng, depth - 1)))

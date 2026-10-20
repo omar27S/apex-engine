@@ -42,7 +42,7 @@ def _read_pantry(backend: Path, island: str) -> dict:
         return {"present": False}
     entries = payload.get("champions") or []
     families: dict[str, int] = {}
-    measured = under = above = 0
+    measured = under = above = confirmed = 0
     top: dict | None = None
     for entry in entries:
         if not isinstance(entry, dict):
@@ -59,6 +59,12 @@ def _read_pantry(backend: Path, island: str) -> dict:
             under += 1
         if top is None or wilson > top["wilson_lb"]:
             top = {"family": fam, "wilson_lb": wilson}
+        # R100 -- a champion CONFIRMED on the recent window (the closest thing
+        # to tomorrow) carries its label into the view; unlabelled entries are
+        # simply not counted as confirmed (never assumed).
+        recency = entry.get("recency")
+        if isinstance(recency, dict) and recency.get("verdict") == "confirmed":
+            confirmed += 1
     return {
         "present": True,
         "champions": len(entries),
@@ -67,6 +73,7 @@ def _read_pantry(backend: Path, island: str) -> dict:
         "measured": measured,
         "under_floor": under,
         "above_floor": above,
+        "confirmed_recent": confirmed,
         "top": top,
     }
 
@@ -113,6 +120,34 @@ def _read_ledger(backend: Path, *, tail: int = 5) -> dict:
     }
 
 
+def _read_guardian(backend: Path) -> dict | None:
+    """The anti-bug guardian's latest round, honestly read (absent -> None).
+
+    The bridge reads the guardian's own ledger the same way it reads the
+    factory's -- as JSON on disk, no import, no layer crossing. A guardian that
+    has never rounded is simply absent (never invented); its wounds and its
+    healings travel to the One Brain and the morning Letter verbatim.
+    """
+    path = backend / "anti_bug_ledger.jsonl"
+    if not path.exists():
+        return None
+    try:
+        rows = [json.loads(ln) for ln in path.read_text().splitlines()
+                if ln.strip()]
+    except (OSError, ValueError):
+        return None
+    if not rows:
+        return None
+    row = rows[-1]  # the latest round is the ward's present state
+    if not isinstance(row, dict):
+        return None
+    return {"verdict": row.get("verdict"), "ts": row.get("ts"),
+            "failed": row.get("failed") or [],
+            "warned": row.get("warned") or [],
+            "healed": row.get("healed") or [],
+            "checks_run": row.get("checks_run")}
+
+
 def pantry_voice(view: dict) -> str:
     """One honest sentence: what the evolution has, and what it lacks."""
     islands = view.get("islands") or {}
@@ -120,6 +155,7 @@ def pantry_voice(view: dict) -> str:
     champions = sum(int(islands[i].get("champions") or 0) for i in present)
     measured = sum(int(islands[i].get("measured") or 0) for i in present)
     above = sum(int(islands[i].get("above_floor") or 0) for i in present)
+    confirmed = sum(int(islands[i].get("confirmed_recent") or 0) for i in present)
     generations = [islands[i].get("generation") for i in present
                    if isinstance(islands[i].get("generation"), int)]
     ledger = view.get("ledger") or {}
@@ -129,6 +165,8 @@ def pantry_voice(view: dict) -> str:
     parts = [f"{champions} champions in the pantry "
              f"({', '.join(present) if present else 'no island'})"]
     parts.append(f"{measured} measured, {above} above the floor")
+    if confirmed:
+        parts.append(f"{confirmed} confirmed on the recent window")
     if generations:
         parts.append(f"generation {max(generations)}")
     if trials:
@@ -139,18 +177,34 @@ def pantry_voice(view: dict) -> str:
         parts.append("no measured shift today")
     parts.append("the evolution is still searching"
                  if above == 0 else "the evolution found floor-clearers")
-    return "; ".join(str(p) for p in parts) + "."
+    voice = "; ".join(str(p) for p in parts) + "."
+    # THE GUARDIAN'S WORD rides with the bridge: the wards' state is part of
+    # the evolution's truth (a green round is said once; a wound is named).
+    guardian = view.get("guardian")
+    if isinstance(guardian, dict) and guardian.get("verdict"):
+        verdict = str(guardian.get("verdict"))
+        if verdict == "clean" and not guardian.get("warned"):
+            voice += " The guardian's last round was green."
+        elif guardian.get("failed"):
+            voice += (f" The guardian reports wounds: "
+                      f"{', '.join(map(str, guardian['failed']))}.")
+        elif guardian.get("healed"):
+            voice += " The guardian healed what it found."
+        else:
+            voice += " The guardian is watching quietly."
+    return voice
 
 
 def evolution_view(backend_dir=".", *, islands: tuple[str, ...] = ISLANDS,
                    ledger_tail: int = 5) -> dict:
-    """The bridge's view: the pantries + the ledger, honestly read."""
+    """The bridge's view: the pantries + the ledger + the guardian, honestly read."""
     backend = Path(backend_dir)
     view = {
         "schema": 1,
         "islands": {island: _read_pantry(backend, island)
                     for island in islands},
         "ledger": _read_ledger(backend, tail=ledger_tail),
+        "guardian": _read_guardian(backend),
         "seat_policy": ("distinct realms, best-first; empty seats stay empty "
                         "(no placeholder)"),
     }

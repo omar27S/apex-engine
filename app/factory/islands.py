@@ -33,6 +33,15 @@ __all__ = [
 
 MIGRATION_SCHEMA = 1
 
+# R99 -- THE ISLAND WHEEL (canonical). The architecture declares three
+# breeding islands (heart, turbo, vault -- 240 bodies x 3 = the 720 the Boss
+# was promised). The wheel lives HERE -- beside the migration it serves -- so
+# the factory's diaspora and the shift runner's rotation can never disagree
+# about the shape of the archipelago. tools.factory.run_factory imports this
+# tuple (its own name kept for its tests' sake); the diaspora reads the OTHER
+# islands' pantries best-first, bounded at population//8.
+ISLAND_WHEEL: tuple[str, ...] = ("heart", "turbo", "vault")
+
 
 class MigrationError(ValueError):
     """A migration was refused (fail-closed)."""

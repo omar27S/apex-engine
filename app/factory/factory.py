@@ -15,7 +15,11 @@ show each one working:
 * R73 realms      — occupied realms + the kings census;
 * R66 ledger      — one honest record per job;
 * R67 slices      — the deterministic slice-set (parallel-safe);
-* R68 islands     — a champion migration export.
+* R68 islands     — a champion migration export;
+* R91 pantry      — the island's champions re-enter generation 0;
+* R99 diaspora    — the OTHER islands' best feed this island too (one gene pool);
+* R100 probation  — every champion is re-measured on the most recent window
+                     before the pantry remembers it (labels, never erasures).
 
 Fail-closed throughout (Scar #1): no ATR/rate is invented; a genome with no
 results is unranked, never promoted. Deterministic under ``(config.seed,
@@ -152,6 +156,25 @@ class _Evaluator:
 
 def _rank_key(fit) -> tuple[float, float]:
     return (float(fit.wilson_lb), float(fit.net_r))
+
+
+def _recency_rank(entry: dict) -> tuple[int, float]:
+    """R100 -- the order a pantry champion re-enters generation 0 in.
+
+    A champion CONFIRMED on the recent window (the closest thing to tomorrow)
+    rides first; a probationer follows; an unjudged entry (an old pantry, a
+    hand-made one) rides last, never refused -- the label is read from the
+    pantry, never assumed, and within each class the measured wilson leads.
+    """
+    verdict = str((entry.get("recency") or {}).get("verdict") or "")
+    order = {"confirmed": 0, "probation": 1}.get(verdict, 2)
+    try:
+        wilson = float(entry.get("wilson_lb") or 0.0)
+    except (TypeError, ValueError):
+        wilson = 0.0
+    if not wilson == wilson:  # NaN guard: an unmeasured score rides last
+        wilson, order = 0.0, 2
+    return (order, -wilson)
 
 
 def _make_staircase(pairs, screen_pair, evaluator: _Evaluator):
@@ -299,8 +322,15 @@ def _gating_block(config: FactoryConfig, population) -> dict:
 
 
 def run_factory(universe, config: FactoryConfig, *,
-                clock=time.monotonic) -> dict:
-    """Run the factory's bounded reproductive loop and return the honest report."""
+                clock=time.monotonic, probation_universe=None) -> dict:
+    """Run the factory's bounded reproductive loop and return the honest report.
+
+    ``probation_universe`` (R100, optional) is a SECOND pair->Frames map over
+    the most recent window: every pantry champion is re-measured on it and
+    labelled (confirmed / probation / couch / unmeasured) -- the label rides
+    with the champion into the pantry and orders its next re-entry. ``None``
+    means no probation this shift (honest ``unmeasured``, never a guess).
+    """
     start = clock()
     pairs = tuple(sorted(p for p in config.pairs if p in universe))
     if not pairs:
@@ -344,6 +374,18 @@ def run_factory(universe, config: FactoryConfig, *,
     # blind every shift (the identical-ledger flatline fix). Fail-open: a
     # missing/corrupt file simply means a fresh random start, as before.
     champions_refused = 0
+    gated_own = 0
+    # DEBT-060 -- THE WATCHTOWER'S WORD AT THE INJECTION DOOR TOO: a family the
+    # state has PAUSED loses its slots, and the pantry's memory may not reopen
+    # a closed door -- not this island's own champions (R91), not a foreigner's
+    # best (R99). Refused and counted, never swallowed: the gating is the
+    # living state's word, and the living state wins (Law 9).
+    _paused = _paused_groups(config)
+
+    def _gated_out(entry) -> bool:
+        group = realms_mod.family_group(str(entry.get("family") or ""))
+        return group in _paused
+
     try:
         _cf = Path(f"factory_champions_{config.island}.json")
         _mig = json.loads(_cf.read_text()) if _cf.exists() else {}
@@ -353,12 +395,64 @@ def run_factory(universe, config: FactoryConfig, *,
         # (re-scored, under the rank floor); an absent/NaN score is a ghost --
         # refused and counted, never silently dropped.
         _pool, champions_refused = dna_mod.honest_champions(_pool)
+        _ungated = []
+        for m in _pool:
+            if _gated_out(m):
+                gated_own += 1
+                continue
+            _ungated.append(m)
+        _pool = _ungated
+        # R100 -- THE RECENCY PROBATION'S ORDER: a champion confirmed on the
+        # recent window re-enters FIRST (the label is read, never assumed; an
+        # unjudged pantry ranks by measure alone, honest and backward-safe).
+        _pool.sort(key=_recency_rank)
         champions_in = [StrategyGenome.from_dict(m["genome"])
                         for m in _pool if m.get("genome")]
     except (OSError, ValueError, TypeError, KeyError):
         champions_in = []
     champions_injected = 0
     champions_in = champions_in[:max(0, config.population // 4)]
+    # R99 -- THE DIASPORA: the other islands' pantries feed this island's
+    # generation 0 too (best-first, honest-validated, dedup by signature).
+    # Three tribes that never trade genes are three SMALL searches wearing
+    # one architecture's clothes; one gene pool of 240 x 3 is the search the
+    # Boss was promised. Bounded: at most population//8 foreigners ride
+    # beside the island's own pop//4 -- the diaspora is a spice, not a
+    # takeover. Fail-open: a broken foreign pantry never starves the shift.
+    diaspora_injected = 0
+    diaspora_refused = 0
+    diaspora_gated = 0
+    diaspora_sources: dict[str, int] = {}
+    try:
+        _foreign_cap = max(0, config.population // 8)
+        _seen = {str(g.signature()) for g in champions_in}
+        for _other in islands_mod.ISLAND_WHEEL:
+            if _other == config.island or diaspora_injected >= _foreign_cap:
+                continue
+            _pf = Path(f"factory_champions_{_other}.json")
+            if not _pf.exists():
+                continue
+            _pm = json.loads(_pf.read_text())
+            _fp, _ref = dna_mod.honest_champions(
+                _pm.get("migrants") or _pm.get("champions") or [])
+            diaspora_refused += _ref
+            _fp.sort(key=_recency_rank)
+            for m in _fp:
+                if diaspora_injected >= _foreign_cap:
+                    break
+                if not m.get("genome") or _gated_out(m):
+                    diaspora_gated += 1
+                    continue
+                _g = StrategyGenome.from_dict(m["genome"])
+                _sig = str(_g.signature())
+                if _sig in _seen:
+                    continue  # no island doubles its population with a clone
+                _seen.add(_sig)
+                champions_in.append(_g)
+                diaspora_injected += 1
+                diaspora_sources[_other] = diaspora_sources.get(_other, 0) + 1
+    except (OSError, ValueError, TypeError, KeyError):
+        pass  # the diaspora is a passenger, never a gate
     polish_deltas: list[dict] = []
     # THE DRAGON'S DIRECTED MUTATIONS: the committed hypotheses, indexed by family
     # and gene. An empty directive set is a no-op (blind evolution, as before).
@@ -530,6 +624,43 @@ def run_factory(universe, config: FactoryConfig, *,
     champions = realms_mod.distinct_realm_champions(
         ranked_rows, seats=config.champion_seats)
 
+    # R100 -- THE RECENCY PROBATION (the fire every champion faces before the
+    # pantry remembers it): the champion was SELECTED on the full book; the
+    # probation re-measures it on the MOST RECENT window -- the closest thing
+    # to tomorrow morning. A champion that only fits the distant past is
+    # LABELLED, never erased (the label is the medicine, and the next shift's
+    # injection reads it). A fresh result memory keeps the probation's reads
+    # from ever colliding with the selection's own (the key would be blind to
+    # the window -- the house learned this the honest way).
+    probation_block = {"applied": False, "confirmed": 0, "probation": 0,
+                       "couch": 0, "unmeasured": 0,
+                       "policy": "the most recent window, fresh memory; "
+                                 "labels, never erasures"}
+    if probation_universe and champions:
+        _prob_eval = _Evaluator(probation_universe, config.min_trades,
+                                rm_mod.ResultMemory())
+        for _ch in champions:
+            try:
+                _rep = _prob_eval.report(
+                    StrategyGenome.from_dict(_ch), pairs)
+                _fit = fitness_mod.fitness(_rep.metrics, config.min_trades)
+                _trades = int(_fit.trades)
+                _wilson = float(_fit.wilson_lb)
+                if _trades >= 5 and _wilson >= 0.20:
+                    _verdict = "confirmed"
+                elif _trades >= 1:
+                    _verdict = "probation"
+                else:
+                    _verdict = "couch"  # measured: no life in the window
+                _ch["recency"] = {"wilson_lb": round(_wilson, 4),
+                                   "net_r": round(float(_fit.net_r), 4),
+                                   "trades": _trades, "verdict": _verdict}
+            except Exception:  # a failed re-read is unmeasured, never a guess
+                _verdict = "unmeasured"
+                _ch["recency"] = {"verdict": _verdict}
+            probation_block[_verdict] = probation_block.get(_verdict, 0) + 1
+        probation_block["applied"] = True
+
     cma_rows: list[dict] = []
     if config.cma and leaderboard:
         for row in leaderboard[:min(5, len(leaderboard))]:
@@ -543,7 +674,8 @@ def run_factory(universe, config: FactoryConfig, *,
             config.island, config.generations,
             [{"genome": StrategyGenome.from_dict(r).to_dict(),
               "family": r["family"], "wilson_lb": r["wilson_lb"],
-              "net_r": r["net_r"]}
+              "net_r": r["net_r"],
+              "recency": r.get("recency")}
              for r in champions],
         ).to_dict()
     else:
@@ -581,6 +713,14 @@ def run_factory(universe, config: FactoryConfig, *,
         "config_hash": config.signature(),
         "seed": shift_seed,
         "champions_injected": champions_injected,
+        "diaspora": {"injected": diaspora_injected,
+                     "sources": diaspora_sources,
+                     "refused": diaspora_refused,
+                     "gated": diaspora_gated + gated_own,
+                     "policy": "cross-island best-first, cap population//8 "
+                               "(R99: three tribes, one gene pool); the "
+                               "Watchtower's paused families never re-enter"},
+        "probation": probation_block,
         "dna": dna_mod.transcribe(champions_refused=champions_refused),
         "island": config.island,
         "pairs": list(pairs),
@@ -614,7 +754,8 @@ def run_factory(universe, config: FactoryConfig, *,
         "realms": realm_census,
         "champions": [
             {"signature": r.get("signature"), "family": r.get("family"),
-             "wilson_lb": r.get("wilson_lb"), "net_r": r.get("net_r")}
+             "wilson_lb": r.get("wilson_lb"), "net_r": r.get("net_r"),
+             "recency": (r.get("recency") or {}).get("verdict")}
             for r in champions
         ],
         "leaderboard_top": [

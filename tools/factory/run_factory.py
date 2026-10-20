@@ -28,6 +28,7 @@ from app.core.pairs import PAIR_PIP  # noqa: E402
 from app.factory import ledger as ledger_mod  # noqa: E402
 from app.factory import dna as dna_mod  # noqa: E402
 from app.factory.factory import FactoryConfig, run_factory  # noqa: E402
+from app.factory.islands import ISLAND_WHEEL  # noqa: E402
 from app.quant import frames as fr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,10 +37,11 @@ ROOT = Path(__file__).resolve().parents[2]
 # vault -- 240 bodies x 3 = the 720 the Boss was promised); the shift config
 # now says "auto" and the wheel takes its turn per shift: every island breeds
 # on its own pantry, no island starved, the migration (R68) carries genes
-# across. The rotation key is the ledger's honest line count -- the SAME key
-# the rotating seed (R92) uses, so island and seed never disagree about which
-# shift this is.
-ISLAND_WHEEL = ("heart", "turbo", "vault")
+# across, and the diaspora (R99) feeds each island with the others' best. The
+# rotation key is the ledger's honest line count -- the SAME key the rotating
+# seed (R92) uses, so island and seed never disagree about which shift this is.
+# (The tuple itself is canonical in app.factory.islands; the name stays
+# importable here for the wheel's own tests.)
 
 
 def _resolve_island(spec: str, ledger_path: str) -> str:
@@ -130,6 +132,18 @@ def main(argv=None) -> int:
     known, _ = pre.parse_known_args(argv)
     cfg = _load_config(known.config) if known.config else {}
 
+    # THE ANTI-BUG GUARDIAN (R102) -- the round of the wards BEFORE the turn:
+    # a sick state is healed (quarantine + restore, reversibly) before the
+    # evolution leans on it. Best-effort BY LAW: the guardian is a passenger,
+    # never a gate -- its failures are recorded and the turn goes on (a
+    # physician who stops the heart to take a pulse is not a physician).
+    try:
+        from app.factory import anti_bug as guardian
+        _round = guardian.sweep(".", write=True)
+        print("[guardian] " + guardian.voice(_round), flush=True)
+    except Exception as _exc:  # fail-open: the turn never waits for its doctor
+        print(f"[guardian] round skipped (fail-open): {_exc}", flush=True)
+
     ap = argparse.ArgumentParser(description="Phase 7e factory run")
     ap.add_argument("--config", default=known.config)
     ap.add_argument("--data", default=cfg.get("data", "data/history"))
@@ -173,6 +187,11 @@ def main(argv=None) -> int:
                          "one lets through to the full judgement (0, 1]")
     ap.add_argument("--ledger", default=cfg.get("ledger", "factory_ledger.jsonl"),
                     help="R66: the honest band ledger this run appends to")
+    ap.add_argument("--probation-rows", type=int,
+                    default=int(cfg.get("probation_rows", 0)),
+                    help="R100: the most recent rows every pantry champion is "
+                         "re-measured on before the pantry remembers it "
+                         "(0 = no probation this shift)")
     args = ap.parse_args(argv)
 
     pairs = [p.strip() for p in args.pairs.split(",") if p.strip()]
@@ -180,6 +199,16 @@ def main(argv=None) -> int:
     if not universe:
         print("no data — nothing to run", file=sys.stderr)
         return 1
+
+    # R100 — THE RECENCY PROBATION'S WINDOW: the most recent rows, loaded with
+    # the same honest reader (the tail of the same tapes -- the closest thing
+    # to tomorrow morning). 0 rows = no probation (the report says so).
+    probation_universe = None
+    if args.probation_rows > 0:
+        probation_universe = _load_universe(args.data, pairs,
+                                            args.probation_rows)
+        if not probation_universe:
+            probation_universe = None  # an absent window is unmeasured, never guessed
 
     # R98 — the island wheel: 'auto' becomes a real island before anything else.
     island = _resolve_island(args.island, args.ledger)
@@ -199,7 +228,8 @@ def main(argv=None) -> int:
         island=island,
         rotate_seed=bool(cfg.get("rotate_seed", False)),
     )
-    report = run_factory(universe, cfg_obj)
+    report = run_factory(universe, cfg_obj,
+                         probation_universe=probation_universe)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(report, indent=2, default=str))
 
@@ -216,6 +246,7 @@ def main(argv=None) -> int:
               f" seed={report.get('seed')}"
               f" champ_in={report.get('champions_injected', 0)}"
               f" champ_out={len(report.get('champions') or [])}"
+              f" migrants={report.get('diaspora', {}).get('injected', 0)}"
               f" {report.get('dna', {}).get('seal') or dna_mod.seal()}"),
     )
     ledger_mod.append([], rec, args.ledger)
@@ -234,6 +265,8 @@ def main(argv=None) -> int:
         "realms": {"occupied": report["realms"]["occupied"],
                    "by_family_group": report["realms"]["by_family_group"]},
         "champions": len(report["champions"]),
+        "diaspora": report.get("diaspora"),
+        "probation": report.get("probation"),
         "dna": report.get("dna"),
     }, indent=2, default=str))
     return 0

@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.core.data import load_parquet  # noqa: E402
 from app.core.pairs import PAIR_PIP  # noqa: E402
 from app.factory import ledger as ledger_mod  # noqa: E402
+from app.factory import dna as dna_mod  # noqa: E402
 from app.factory.factory import FactoryConfig, run_factory  # noqa: E402
 from app.quant import frames as fr  # noqa: E402
 
@@ -169,7 +170,8 @@ def main(argv=None) -> int:
         realms_occupied=int(report["realms"]["occupied"]),
         note=(f"pairs={len(universe)} pop={args.population}"
               f" seed={report.get('seed')}"
-              f" champ={report.get('champions_injected', 0)}"),
+              f" champ={report.get('champions_injected', 0)}"
+              f" {report.get('dna', {}).get('seal') or dna_mod.seal()}"),
     )
     ledger_mod.append([], rec, args.ledger)
 
@@ -187,6 +189,7 @@ def main(argv=None) -> int:
         "realms": {"occupied": report["realms"]["occupied"],
                    "by_family_group": report["realms"]["by_family_group"]},
         "champions": len(report["champions"]),
+        "dna": report.get("dna"),
     }, indent=2, default=str))
     return 0
 

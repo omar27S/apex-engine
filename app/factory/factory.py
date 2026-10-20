@@ -42,6 +42,7 @@ from app.quant import evaluator as ev
 from app.quant import fitness as fitness_mod
 from app.quant import tribunal
 from app.quant.genome import GENE_BOUNDS, GENE_BOUNDS_BY_NAME, StrategyGenome
+from app.factory import dna as dna_mod
 from app.factory import eda as eda_mod
 from app.factory import entropy as entropy_mod
 from app.factory import islands as islands_mod
@@ -325,10 +326,16 @@ def run_factory(universe, config: FactoryConfig, *,
     # their re-scoring nearly free). Evolution ACCUMULATES instead of restarting
     # blind every shift (the identical-ledger flatline fix). Fail-open: a
     # missing/corrupt file simply means a fresh random start, as before.
+    champions_refused = 0
     try:
         _cf = Path(f"factory_champions_{config.island}.json")
         _mig = json.loads(_cf.read_text()) if _cf.exists() else {}
         _pool = (_mig.get("migrants") or _mig.get("champions") or [])
+        # THE DIRECTOR'S DNA (Law 3) -- the honest injection: a champion must
+        # CARRY A MEASURE to re-enter generation 0. A measured 0.0 is honest
+        # (re-scored, under the rank floor); an absent/NaN score is a ghost --
+        # refused and counted, never silently dropped.
+        _pool, champions_refused = dna_mod.honest_champions(_pool)
         champions_in = [StrategyGenome.from_dict(m["genome"])
                         for m in _pool if m.get("genome")]
     except (OSError, ValueError, TypeError, KeyError):
@@ -522,6 +529,7 @@ def run_factory(universe, config: FactoryConfig, *,
         "config_hash": config.signature(),
         "seed": shift_seed,
         "champions_injected": champions_injected,
+        "dna": dna_mod.transcribe(champions_refused=champions_refused),
         "island": config.island,
         "pairs": list(pairs),
         "population": config.population,

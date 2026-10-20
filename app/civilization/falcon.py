@@ -238,26 +238,31 @@ def select_hot_pairs(readings: dict, *, n: int = 3, min_heat: float = 0.0) -> di
 def regime_flag(reading: dict) -> dict:
     """A pair's LIVE REGIME: trending / ranging / volatile / dead (or unmeasured).
 
-    The rule (deterministic, from the live reading):
-      * no measured velocity -> ``None`` (unmeasured);
-      * very low velocity -> ``dead``;
-      * a burst (velocity AND volatility high) -> ``volatile``;
-      * a sustained one-sided session delta with high velocity -> ``trending``;
-      * otherwise -> ``ranging``.
+    The rule (deterministic, from the MEASURED MOTION -- pips per minute -- never
+    from the sensor's sampling cadence):
+      * no measured motion (no volatility, no session delta) -> ``None`` (unmeasured);
+      * a frozen pair (< 0.2 pips/min and no session delta) -> ``dead``;
+      * a burst (>= 20 pips/min) -> ``volatile``;
+      * a sustained one-sided push (>= 6 pips/min, or a big session delta) ->
+        ``trending``;
+      * otherwise (the quiet breathing of the majors) -> ``ranging``.
+
+    ``tick_velocity`` is the SENSOR's cadence (samples per minute), not the
+    market's motion: the old < 2.0 knife-edge sat exactly on the falcon's REST
+    cadence (60/30.x ~ 1.97) and called every real reading "dead" for a rounding
+    hair -- the cathedral collapsed on a lie (Law 10).
     """
-    vel = reading.get("tick_velocity")
     vol = reading.get("volatility_pips")
     delta = reading.get("session_delta")
-    if vel is None:
+    if vol is None and delta is None:
         return {"pair": reading.get("pair"), "regime": None,
                 "reading": "regime non misurato"}
-    vel = float(vel)
     vol = float(vol or 0.0)
-    if vel < 2.0:
+    if vol < 0.2 and (delta is None or abs(float(delta)) < 40.0):
         regime = "dead"
-    elif vel >= 20.0 and vol >= 10.0:
+    elif vol >= 20.0:
         regime = "volatile"
-    elif delta is not None and abs(float(delta)) >= 40.0 and vel >= 8.0:
+    elif vol >= 6.0 or (delta is not None and abs(float(delta)) >= 40.0):
         regime = "trending"
     else:
         regime = "ranging"

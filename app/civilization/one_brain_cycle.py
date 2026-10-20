@@ -163,7 +163,8 @@ def _market_model(night_report: dict, *, version: int, ts: str,
 
 def run_one_brain(store_state: dict, *, night_report: dict | None = None,
                   agents: list[str] | None = None, ts: str = "",
-                  hawk: dict | None = None, futures: dict | None = None) -> dict:
+                  hawk: dict | None = None, futures: dict | None = None,
+                  evo: dict | None = None) -> dict:
     """Run the collective over one night; mutate ``store_state``; return the block.
 
     Deterministic and honest. Every funded idea becomes a cognitive package; the
@@ -355,6 +356,10 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         f"{sum(1 for d in decisions if d.get('decided'))} decision(s), "
         f"umore {mood.get('dominant')}, sinergia {synergy}, "
         f"modello {'cambiato' if model_change.get('changed') else 'stabile'}")
+    # THE BRIDGE (the evolution's pantry, honestly read) rides the block: the
+    # Letter and the funders can finally SEE the heart's harvest. Honest None
+    # when no view was handed in (an older grand renders as before).
+    block["evolution"] = evo
 
     ob["version"] = version
     ob["model"] = model

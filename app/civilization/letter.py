@@ -1229,6 +1229,38 @@ def one_brain_lines(civ: dict | None) -> list[str]:
     L.append(f"  - v{model.get('version')}: {model.get('belief') or 'non misurato'}")
     L.append(f"  - {change.get('reading')}")
     L.append("")
+    # THE BRIDGE: la dispensa dell'evoluzione -- il cuore e la mente si parlano.
+    evo = ob.get("evolution")
+    if evo:
+        L.append("**La dispensa dell'evoluzione (il ponte col cuore).**")
+        isles = evo.get("islands") or {}
+        present = [i for i, v in isles.items()
+                   if isinstance(v, dict) and v.get("present")]
+        above = 0
+        if present:
+            tot = sum(int(isles[i].get("champions") or 0) for i in present)
+            meas = sum(int(isles[i].get("measured") or 0) for i in present)
+            above = sum(int(isles[i].get("above_floor") or 0) for i in present)
+            L.append(f"  - {tot} campioni in dispensa ({', '.join(present)}); "
+                     f"{meas} misurati, {above} sopra il pavimento.")
+            top = max((isles[i].get("top") for i in present
+                       if isles[i].get("top")),
+                      key=lambda t: float(t.get("wilson_lb") or 0.0),
+                      default=None)
+            if top:
+                L.append(f"  - migliore: {top.get('family')} "
+                         f"(wilson_lb {top.get('wilson_lb')}).")
+        else:
+            L.append("  - nessuna isola ha ancora una dispensa (non misurato).")
+        led = evo.get("ledger") or {}
+        trials = led.get("trials_today") or 0
+        if trials:
+            seal = f" [{led.get('dna_seal')}]" if led.get("dna_seal") else ""
+            L.append(f"  - il cuore ha girato {trials:,} prove oggi{seal}.")
+        if not above:
+            L.append("  - l'evoluzione sta ancora cercando: nessun campione "
+                     "ha superato il pavimento.")
+        L.append("")
 
     # IL PUNTEGGIO DI SINERGIA.
     L.append("**Il punteggio di sinergia.**")

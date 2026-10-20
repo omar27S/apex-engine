@@ -132,6 +132,10 @@ def main(argv=None) -> int:
     ap.add_argument("--layers-quota", type=float,
                     default=float(cfg.get("layers_quota", 0.0)),
                     help="JUMP 7: the multi-layer population share")
+    ap.add_argument("--champion-seats", type=int,
+                    default=int(cfg.get("champion_seats", 9)),
+                    help="R96: the pantry's breadth -- distinct-realm "
+                         "champions per shift")
     ap.add_argument("--ledger", default=cfg.get("ledger", "factory_ledger.jsonl"),
                     help="R66: the honest band ledger this run appends to")
     args = ap.parse_args(argv)
@@ -147,6 +151,7 @@ def main(argv=None) -> int:
         directed=_load_directed(args.directed),
         regime_gating=_load_gating(args.state),
         layers_quota=args.layers_quota,
+        champion_seats=args.champion_seats,
         population=args.population, generations=args.generations, elite=args.elite,
         min_trades=args.min_trades, seed=args.seed,
         ensemble_quota=args.ensemble_quota, n_slices=args.n_slices,

@@ -91,6 +91,10 @@ class FactoryConfig:
     # JUMP 7 — the multi-layer quota: the share of the population that draws a
     # coordination stack (strategic D1 + tactical H4 above the execution M15).
     layers_quota: float = 0.0
+    # R96 — THE NINE SEATS: how many distinct-realm champions each shift sets
+    # aside for the pantry and the migration. Fewer occupied realms yield
+    # fewer champions (empty seats stay empty; no placeholder, R20/R21 spirit).
+    champion_seats: int = 9
 
     def signature(self) -> str:
         blob = json.dumps(
@@ -102,6 +106,7 @@ class FactoryConfig:
                 "slice_salt": self.slice_salt, "polish": self.polish,
                 "cma": self.cma, "staircase": self.staircase,
                 "layers_quota": self.layers_quota,
+                "champion_seats": self.champion_seats,
                 "regime_gating": self.regime_gating,
             },
             sort_keys=True, default=str,
@@ -487,7 +492,7 @@ def run_factory(universe, config: FactoryConfig, *,
 
     realm_census = realms_mod.census(leaderboard)
     champions = realms_mod.distinct_realm_champions(
-        leaderboard, seats=7)
+        leaderboard, seats=config.champion_seats)
 
     cma_rows: list[dict] = []
     if config.cma and leaderboard:

@@ -34,6 +34,12 @@ __all__ = [
     "REGIMES",
     "SIREN_KINDS",
     "HEALTH_ALIVE_S",
+    "HISTORY_MAX_ROWS",
+    "HISTORY_MAX_AGE_S",
+    "MOTION_MIN_SPAN_S",
+    "pip_size",
+    "merge_history",
+    "window_motion",
     "health_from_readings",
     "source_health",
     "source_health_report",
@@ -60,6 +66,22 @@ FALCON_VERSION: int = 1
 # A source silent this long is SLEEPING (honest, never a false tick). 15 minutes.
 HEALTH_ALIVE_S: int = 900
 
+# THE FALCON'S MEMORY (D4, 2026-10-20). The service reads every 5 minutes, so
+# HISTORY_MAX_ROWS points per pair is ~2 hours of honest window; a point older
+# than HISTORY_MAX_AGE_S falls away (the memory is bounded, the file never grows
+# without end). MOTION_MIN_SPAN_S is the shortest window the motion is measured
+# on: two samples 30 seconds apart say nothing about a market that ticks once a
+# minute -- the old falcon measured its own sampling cadence and called frozen
+# feeds "dead" for a rounding hair (the wound is numbered, D4).
+HISTORY_MAX_ROWS: int = 24
+HISTORY_MAX_AGE_S: float = 2.0 * 24.0 * 3600.0
+MOTION_MIN_SPAN_S: float = 240.0
+
+
+def pip_size(pair: str) -> float:
+    """An honest pip per pair: 0.01 when the yen quotes, else 0.0001."""
+    return 0.01 if str(pair).upper().endswith("JPY") else 1e-4
+
 # The free, keyless-or-free-tier sources the falcon may open. Each carries its own
 # reliability and its own fail-closed behaviour. ``keyless`` sources need no key.
 SOURCES: tuple[dict, ...] = (
@@ -78,7 +100,8 @@ SOURCES: tuple[dict, ...] = (
     {"name": "oanda_v20", "kind": "websocket", "keyless": False,
      "covers": ("fx",), "note": "OANDA v20 practice stream"},
     {"name": "ecb_sdw", "kind": "rest", "keyless": True,
-     "covers": ("rates",), "note": "ECB Data Portal; policy + reference rates"},
+     "covers": ("rates",), "note": "ECB Data Portal; MRO + deposit-facility policy rates "
+                                "(probed live 2026-10-20: keyless JSON answers)"},
     {"name": "frankfurter_ecb", "kind": "rest", "keyless": True,
      "covers": ("fx",), "note": "Frankfurter (ECB reference FX); keyless majors"},
     {"name": "fred", "kind": "rest", "keyless": False,
@@ -86,25 +109,38 @@ SOURCES: tuple[dict, ...] = (
     {"name": "fear_greed", "kind": "rest", "keyless": True,
      "covers": ("sentiment",), "note": "Fear & Greed Index; free JSON"},
     {"name": "reddit_public", "kind": "rest", "keyless": True,
-     "covers": ("sentiment",), "note": "r/Forex + r/Trading public JSON; read-only"},
+     "covers": ("sentiment",), "note": "r/Forex + r/Trading public JSON; read-only "
+                                "(probed 2026-10-20: 403 from the datacenter -- sleeps honestly, "
+                                "the reader stays wired for the day it opens)"},
     {"name": "stocktwits_public", "kind": "rest", "keyless": True,
-     "covers": ("sentiment",), "note": "StockTwits public feed; read-only"},
+     "covers": ("sentiment",), "note": "StockTwits public feed; read-only "
+                                 "(probed 2026-10-20: 403 -- sleeps honestly, wired for the day it opens)"},
 )
 
 # DEBT-064: the sources main actually reads today (a real reader feeds them).
 # Every other declared source is honestly "declared but not wired" -- reported,
-# never assumed alive.
+# never assumed alive.  D4 (2026-10-20): the eye grows from five to EIGHT wired
+# sources -- ecb_sdw (policy rates, probed live), reddit_public and
+# stocktwits_public (sentiment; both answer 403 from this datacenter today,
+# so they sleep wired -- an honest "dorme", never a fabricated post).
 WIRED_SOURCES: frozenset[str] = frozenset({
     "kraken_public", "frankfurter_ecb", "binance_public", "yahoo_finance",
-    "fear_greed",
+    "fear_greed", "ecb_sdw", "reddit_public", "stocktwits_public",
 })
 
-# THE MACRO RADAR (Law 9 instruments, finally SEEN live). Each maps a Yahoo symbol.
+# THE MACRO RADAR (Law 9 instruments, finally SEEN live). Each maps a Yahoo symbol
+# unless it names another wired reader: the ECB policy pair (ECB_MRO, ECB_DFR)
+# comes from the ECB Data Portal (ecb_sdw), not Yahoo -- a reader that cannot
+# serve an axis simply leaves it unseen (never a fabricated level).
 MACRO_RADAR: tuple[dict, ...] = (
     {"name": "DXY", "yahoo": "DX-Y.NYB", "what": "the dollar index (the tide)"},
     {"name": "WTI", "yahoo": "CL=F", "what": "crude (the inflation pulse)"},
     {"name": "US10Y", "yahoo": "^TNX", "what": "the 10-year yield (the discount rate)"},
     {"name": "VIX", "yahoo": "^VIX", "what": "the fear gauge"},
+    {"name": "ECB_MRO", "provider": "ecb_sdw",
+     "what": "the ECB main refinancing rate (the price of money)"},
+    {"name": "ECB_DFR", "provider": "ecb_sdw",
+     "what": "the ECB deposit facility rate (the ceiling of rates)"},
 )
 
 # The four live regimes a pair can be in.
@@ -113,6 +149,87 @@ REGIMES: tuple[str, ...] = ("trending", "ranging", "volatile", "dead")
 # The extraordinary readings that fire the siren.
 SIREN_KINDS: tuple[str, ...] = ("volatility_burst", "flash_move",
                                 "spread_anomaly", "macro_breakout")
+
+# --- THE FALCON'S MEMORY (the readings history -- the honest motion) ---------
+
+
+def merge_history(history: dict, prices: dict, *, now_epoch: float,
+                  max_rows: int = HISTORY_MAX_ROWS,
+                  max_age_s: float = HISTORY_MAX_AGE_S) -> dict:
+    """Fold one reading pass into the per-pair price history (pure, bounded).
+
+    ``history`` maps ``pair -> [{ts, price, source}, ...]`` in time order;
+    ``prices`` is this pass's ``{pair: {"price", "source"?, ...}}``. Each pair's
+    new point is APPENDED (a same-epoch point replaces its predecessor, so the
+    turn's two samples stay two, not a stutter). Points older than ``max_age_s``
+    are dropped and each pair keeps at most ``max_rows`` points. A pair absent
+    from ``prices`` keeps its history (an absent reading is not a deletion); a
+    pair with an empty history disappears (never a ghost row). Pure: no clocks,
+    no sockets -- ``now_epoch`` is given.
+    """
+    out: dict = {}
+    for pair, rows in (history or {}).items():
+        kept = [r for r in (rows or [])
+                if isinstance(r, dict) and isinstance(r.get("price"), (int, float))
+                and float(now_epoch) - float(r.get("ts") or 0.0) <= max_age_s]
+        if kept:
+            out[pair] = kept[-max_rows:]
+    for pair, r in (prices or {}).items():
+        price = (r or {}).get("price")
+        if not isinstance(price, (int, float)):
+            continue
+        point = {"ts": float(now_epoch), "price": float(price),
+                 "source": (r or {}).get("source") or "unknown"}
+        rows = out.setdefault(pair, [])
+        if rows and rows[-1]["ts"] == point["ts"]:
+            rows[-1] = point  # a same-epoch pass replaces, it does not stutter
+        else:
+            rows.append(point)
+        out[pair] = rows[-max_rows:]
+    return out
+
+
+def window_motion(history: dict, *, now_epoch: float = 0.0,
+                  min_span_s: float = MOTION_MIN_SPAN_S) -> dict:
+    """The honest motion per pair, measured on the WHOLE remembered window.
+
+    For each pair with at least two points spanning ``>= min_span_s``:
+
+    * ``volatility_pips`` -- pips moved across the window, per minute
+      (|last - first| / pip / minutes); a slow feed that ticks once every
+      few passes finally shows its TRUE motion instead of a frozen 0.0;
+    * ``tick_velocity`` -- DISTINCT prices seen per minute: the market's own
+      update rhythm, not the sensor's sampling cadence (the old value was
+      ``60/seconds`` -- identical for every pair by construction, a measure
+      of the method, not of the market);
+    * ``window_min`` / ``samples`` / ``source`` -- the window's honest size,
+      how many points carried it, and which feed served the latest price.
+
+    A pair with too short a window is ABSENT (unmeasured, never fabricated).
+    Pure: the history is given, the clock is given.
+    """
+    out: dict = {}
+    for pair, rows in (history or {}).items():
+        pts = [r for r in (rows or [])
+               if isinstance(r, dict) and isinstance(r.get("price"), (int, float))]
+        if len(pts) < 2:
+            continue
+        first, last = pts[0], pts[-1]
+        span = float(last["ts"]) - float(first["ts"])
+        if span < float(min_span_s):
+            continue
+        minutes = max(span / 60.0, 1e-9)
+        pips = abs(float(last["price"]) - float(first["price"])) / pip_size(pair)
+        distinct = len({round(float(p["price"]), 10) for p in pts})
+        out[pair] = {
+            "volatility_pips": round(pips / minutes, 3),
+            "tick_velocity": round(distinct / minutes, 4),
+            "window_min": round(minutes, 1),
+            "samples": len(pts),
+            "source": last.get("source") or "unknown",
+        }
+    return out
+
 
 # --- the per-source HEALTH MONITOR ------------------------------------------
 
@@ -484,6 +601,11 @@ def falcon_summary(state: dict, *, now_epoch: float = 0.0) -> dict:
     regimes = regime_flags(readings)
     macro = macro_radar(f.get("macro") or {})
     ticks = f.get("ticks")
+    # D4 -- the honest motion census: how many pairs carry a MEASURED window
+    # (volatility from the remembered history, not from one 30-second peek).
+    motion_measured = sum(1 for r in readings.values()
+                          if isinstance(r or {}, dict)
+                          and isinstance((r or {}).get("volatility_pips"), (int, float)))
     return {
         "ticks": ticks if isinstance(ticks, (int, float)) else None,
         "sources_active": health["alive"],
@@ -492,9 +614,12 @@ def falcon_summary(state: dict, *, now_epoch: float = 0.0) -> dict:
         "macro_seen": macro["seen"],
         "regimes": regimes["counts"],
         "regime_unmeasured": regimes["unmeasured"],
+        "motion_measured": motion_measured,
         "reading": (f"falco: {ticks if ticks is not None else '--'} tick, "
                     f"{health['alive']}/{health['n']} fonti sveglie, "
-                    f"{macro['seen']}/{macro['n']} strumenti macro"),
+                    f"{macro['seen']}/{macro['n']} strumenti macro"
+                    + (f", {motion_measured} coppie col moto misurato"
+                       if motion_measured else "")),
     }
 
 

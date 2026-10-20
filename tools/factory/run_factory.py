@@ -214,7 +214,8 @@ def main(argv=None) -> int:
         realms_occupied=int(report["realms"]["occupied"]),
         note=(f"pairs={len(universe)} pop={args.population}"
               f" seed={report.get('seed')}"
-              f" champ={report.get('champions_injected', 0)}"
+              f" champ_in={report.get('champions_injected', 0)}"
+              f" champ_out={len(report.get('champions') or [])}"
               f" {report.get('dna', {}).get('seal') or dna_mod.seal()}"),
     )
     ledger_mod.append([], rec, args.ledger)

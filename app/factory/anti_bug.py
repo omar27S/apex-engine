@@ -27,6 +27,12 @@ Twelve checks (one per law of the Director's DNA, in spirit):
 * dd_ledger_grown -- since the D3 law landed, the account's memory of pain
                      exists and grew each night (warn through the first
                      transition day, fail after);
+* hyperfeed_alive -- the live wire's snapshot is fresh (warn: the wire is the
+                     FAST eye -- a quiet wire is a sleeping sensor, and the
+                     systemd unit restarts it on its own; unborn until the
+                     service's first install is SOFT, not a wound).
+And the standing doctrine:
+
 * quarantine_only -- the guardian NEVER touches the append-only factory ledger;
                      it heals pantries and state files only, by quarantine +
                      git-restore (reversible by design).
@@ -62,6 +68,14 @@ DISK_FLOOR_MB = 1024
 # The falcon timer beats every 5 minutes; nine missed beats (45 min) is a
 # sleeping eye, not a blink (D4 taught the difference between cadence and life).
 FALCON_MAX_AGE_S = 45 * 60
+# THE LIVE WIRE (hyperfeed): the daemon snapshots every 20 s, so 15 minutes
+# of silence is a wire gone quiet (three orders of magnitude beyond the
+# falcon's patience -- the fast eye must answer fast).
+HYPERFEED_MAX_AGE_S = 15 * 60
+HYPERFEED_FILE = "hyperfeed.json"
+# The day the live wire was born (2026-10-20). Before it the check is UNBORN
+# (SOFT), mirroring the dd ledger's transition-day doctrine.
+HYPERFEED_BIRTH = _dt.date(2026, 10, 20)
 QUARANTINE_DIR = "quarantine"
 # The day the D3 law was consecrated (2026-10-20); the dd ledger's first honest
 # night is the Grand of 2026-10-21. Before that date the check is unborn.
@@ -322,6 +336,41 @@ def _check_dd_ledger_grown(backend: Path, ctx: dict) -> tuple[bool, str]:
 
 
 # (name, severity, fn) -- severity: "fail" wounds the verdict, "warn" records
+def _check_hyperfeed_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """The live wire's clock: is hyperfeed.json fresh?
+
+    The daemon writes a snapshot every 20 seconds; the guardian reads the
+    snapshot's OWN ``ts`` first (the machine's mtime lies when a file is
+    copied) and falls back to the mtime when the clock is unreadable. The
+    wire is new-born: before its first install the check is SOFT (an unborn
+    sensor is emptiness, not a lie), and after that a quiet wire is a WARN
+    -- the unit restarts itself, and the guardian's job is to SAY it, not
+    to amputate what it has not studied.
+    """
+    path = backend / HYPERFEED_FILE
+    if not path.exists():
+        if ctx["now"].date() <= HYPERFEED_BIRTH:
+            return True, "SOFT: the live wire is not installed yet (birth day)"
+        return False, "hyperfeed.json is absent -- the wire never wrote"
+    age = None
+    try:
+        data = json.loads(path.read_text())
+        ts = (data or {}).get("ts")
+        if isinstance(ts, (int, float)):
+            age = ctx["now"].timestamp() - float(ts)
+    except (OSError, ValueError, TypeError):
+        pass
+    if age is None:
+        try:
+            age = ctx["now"].timestamp() - path.stat().st_mtime
+        except OSError:
+            return False, "hyperfeed.json cannot be read or stat-ed"
+    if age > HYPERFEED_MAX_AGE_S:
+        return False, (f"the live wire went quiet {int(age / 60)} min ago "
+                       f"(> {HYPERFEED_MAX_AGE_S // 60} min) -- the fast eye sleeps")
+    return True, f"the live wire is fresh ({int(age)} s since its snapshot)"
+
+
 CHECKS: tuple[tuple[str, str, object], ...] = (
     ("ledger_sealed", "fail", _check_ledger_sealed),
     ("ledger_alive", "warn", _check_ledger_alive),
@@ -334,6 +383,7 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("heart_scheduled", "warn", _check_heart_scheduled),
     ("letter_of_dawn", "warn", _check_letter_of_dawn),
     ("dd_ledger_grown", "warn", _check_dd_ledger_grown),
+    ("hyperfeed_alive", "warn", _check_hyperfeed_alive),
 )
 
 

@@ -57,6 +57,7 @@ __all__ = [
     "cross_reference_events",
     "archive_tick",
     "search_memory",
+    "live_wire_block",
     "falcon_summary",
     "falcon_block",
 ]
@@ -115,6 +116,11 @@ SOURCES: tuple[dict, ...] = (
     {"name": "stocktwits_public", "kind": "rest", "keyless": True,
      "covers": ("sentiment",), "note": "StockTwits public feed; read-only "
                                  "(probed 2026-10-20: 403 -- sleeps honestly, wired for the day it opens)"},
+    {"name": "hyperfeed", "kind": "file", "keyless": True,
+     "covers": ("fx", "crypto", "ticks"),
+     "note": "THE LIVE WIRE: the hyperfeed daemon's snapshot (WebSocket "
+             "top-of-book at millisecond cadence, keyless). The falcon "
+             "reads its file; the wire owns the speed, the falcon the meaning"},
 )
 
 # DEBT-064: the sources main actually reads today (a real reader feeds them).
@@ -126,7 +132,67 @@ SOURCES: tuple[dict, ...] = (
 WIRED_SOURCES: frozenset[str] = frozenset({
     "kraken_public", "frankfurter_ecb", "binance_public", "yahoo_finance",
     "fear_greed", "ecb_sdw", "reddit_public", "stocktwits_public",
+    "hyperfeed",
 })
+
+# --- THE LIVE WIRE (the hyperfeed's snapshot, honestly read) ---------------
+
+
+def live_wire_block(snapshot: dict, *, now_epoch: float) -> dict:
+    """The live wire's reading, age-gated and unit-declared (pure).
+
+    ``snapshot`` is the hyperfeed daemon's file (``app.market.hyperfeed``).
+    The block carries only what the wire MEASURED: per symbol the last
+    bid/ask/mid with its age, and the motion computed on the wire's own
+    remembered span (pips per minute for FX, basis points for crypto -- the
+    unit rides in the block, never assumed). A wire older than
+    :data:`HEALTH_ALIVE_S` is SLEEPING ("il filo dorme") and its symbols
+    are empty -- a stale snapshot is history, not sight. An unparseable or
+    absent snapshot is ``non misurato``. Never a fabricated tick.
+    """
+    if not isinstance(snapshot, dict):
+        return {"state": "non misurato", "symbols": {}, "venues": {},
+                "reading": "il filo vivo non ha scritto"}
+    ts = snapshot.get("ts")
+    if not isinstance(ts, (int, float)):
+        return {"state": "non misurato", "symbols": {}, "venues": {},
+                "reading": "il filo vivo non ha l'ora"}
+    age_s = max(0.0, float(now_epoch) - float(ts))
+    venues = {}
+    for name, h in (snapshot.get("venues") or {}).items():
+        venues[name] = {"state": h.get("state"),
+                        "ticks": h.get("ticks"),
+                        "reconnects": h.get("reconnects"),
+                        "latency": (h.get("latency") or {}).get("p50_ms")}
+    if age_s > HEALTH_ALIVE_S:
+        return {"state": "sleeping", "age_s": round(age_s, 1),
+                "symbols": {}, "venues": venues,
+                "reading": f"il filo vivo dorme ({int(age_s / 60)} min)"}
+    symbols = {}
+    for sym, blk in (snapshot.get("symbols") or {}).items():
+        if not isinstance(blk, dict) or blk.get("mid") is None:
+            continue
+        row = {"bid": blk.get("bid"), "ask": blk.get("ask"),
+               "mid": blk.get("mid"), "unit": blk.get("unit"),
+               "age_s": blk.get("age_s"), "ticks": blk.get("ticks")}
+        motion = blk.get("motion")
+        if isinstance(motion, dict):
+            row["motion_per_min"] = motion.get("displacement_per_min")
+            row["path_per_min"] = motion.get("path_per_min")
+            row["velocity_per_min"] = motion.get("velocity_per_min")
+            row["motion_span_min"] = motion.get("span_min")
+        else:
+            row["motion_per_min"] = None  # unmeasured below the min span, never 0.0
+        symbols[sym] = row
+    counts = snapshot.get("counts") or {}
+    moving = counts.get("symbols_moving") or 0
+    return {
+        "state": "alive", "age_s": round(age_s, 1),
+        "symbols": symbols, "venues": venues,
+        "reading": (f"filo vivo: {len(symbols)} simboli visti, {moving} in moto "
+                    f"(WS, cadenza ms)"),
+    }
+
 
 # THE MACRO RADAR (Law 9 instruments, finally SEEN live). Each maps a Yahoo symbol
 # unless it names another wired reader: the ECB policy pair (ECB_MRO, ECB_DFR)

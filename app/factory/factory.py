@@ -19,7 +19,15 @@ show each one working:
 * R91 pantry      — the island's champions re-enter generation 0;
 * R99 diaspora    — the OTHER islands' best feed this island too (one gene pool);
 * R100 probation  — every champion is re-measured on the most recent window
-                     before the pantry remembers it (labels, never erasures).
+                     before the pantry remembers it (labels, never erasures);
+* R103 atlas      — the behavioral atlas (quality-diversity): 36 measured
+                     niches keep their own elite, and the map's best feed
+                     generation 0 beside the pantry (diversity is preparation
+                     for the regime that has not arrived);
+* R104 cognition  — the Director's faculties as instruments: slice
+                     agreement (independence of evidence) measured for every
+                     champion, and the calibration ledger grading the
+                     probation's own predictions (a label is a prediction).
 
 Fail-closed throughout (Scar #1): no ATR/rate is invented; a genome with no
 results is unranked, never promoted. Deterministic under ``(config.seed,
@@ -51,10 +59,12 @@ from app.factory import eda as eda_mod
 from app.factory import entropy as entropy_mod
 from app.factory import islands as islands_mod
 from app.factory import polish as polish_mod
+from app.factory import qd as qd_mod
 from app.factory import realms as realms_mod
 from app.factory import result_memory as rm_mod
 from app.factory import slices as slices_mod
 from app.factory import staircase as staircase_mod
+from app.factory import zcognition as zcog_mod
 
 __all__ = ["FactoryConfig", "run_factory"]
 
@@ -106,6 +116,17 @@ class FactoryConfig:
     # friction) killed 240/240 random bodies for days -- extinction, not
     # selection; an extinct pool cannot breed.
     screen_survival: float = 0.6
+    # R103 — THE BEHAVIORAL ATLAS: quality-diversity beside the pantry. The
+    # atlas offers only RANKED bodies (measured behavior, never couches),
+    # keeps one elite per behavioral niche (activity x horizon x direction),
+    # and injects its best into generation 0 (``qd_injection`` of the
+    # population, capped, dedup'd, gated like every other door).
+    qd: bool = True
+    qd_injection: float = 0.125
+    qd_top: int = 60
+    # R104 — THE COGNITION INSTRUMENTS: slice agreement for every champion
+    # and the calibration ledger grading the probation's own predictions.
+    calibration: bool = True
 
     def signature(self) -> str:
         blob = json.dumps(
@@ -119,6 +140,10 @@ class FactoryConfig:
                 "layers_quota": self.layers_quota,
                 "champion_seats": self.champion_seats,
                 "screen_survival": self.screen_survival,
+                "qd": self.qd,
+                "qd_injection": self.qd_injection,
+                "qd_top": self.qd_top,
+                "calibration": self.calibration,
                 "regime_gating": self.regime_gating,
             },
             sort_keys=True, default=str,
@@ -453,6 +478,39 @@ def run_factory(universe, config: FactoryConfig, *,
                 diaspora_sources[_other] = diaspora_sources.get(_other, 0) + 1
     except (OSError, ValueError, TypeError, KeyError):
         pass  # the diaspora is a passenger, never a gate
+    # R103 -- THE ATLAS'S SEED: the behavioral map's best ride generation 0
+    # beside the pantry's champions and the diaspora's foreigners. The map is
+    # the evolution's DIVERSITY memory: one elite per measured behavior, so
+    # a regime shift never finds the pool made of one kind of hunter. The
+    # same laws as every other door: honest (a cell cannot exist without a
+    # measured wilson), dedup'd by signature, gated by the Watchtower's
+    # word, capped (a spice, not a takeover). Fail-open: a torn atlas is a
+    # fresh random start, never a crash.
+    qd_injected = 0
+    qd_gated = 0
+    qd_dupes = 0
+    if config.qd:
+        try:
+            _seen_qd = {str(g.signature()) for g in champions_in}
+            _atlas_seed = qd_mod.load_archive(
+                f"factory_qd_{config.island}.json")
+            _cap = max(0, int(round(config.population * float(config.qd_injection))))
+            for _e in _atlas_seed.diversity_pool(_cap):
+                _g_dict = _e.get("genome")
+                if not isinstance(_g_dict, dict):
+                    continue
+                _sig = str(_e.get("signature") or "")
+                if not _sig or _sig in _seen_qd:
+                    qd_dupes += 1
+                    continue
+                if _gated_out(_e):
+                    qd_gated += 1
+                    continue
+                champions_in.append(StrategyGenome.from_dict(_g_dict))
+                _seen_qd.add(_sig)
+                qd_injected += 1
+        except (OSError, ValueError, TypeError, KeyError):
+            pass  # the atlas is a passenger, never a gate
     polish_deltas: list[dict] = []
     # THE DRAGON'S DIRECTED MUTATIONS: the committed hypotheses, indexed by family
     # and gene. An empty directive set is a no-op (blind evolution, as before).
@@ -661,6 +719,113 @@ def run_factory(universe, config: FactoryConfig, *,
             probation_block[_verdict] = probation_block.get(_verdict, 0) + 1
         probation_block["applied"] = True
 
+    # R104 -- THE COGNITION INSTRUMENTS (the Director's faculties, applied):
+    # (a) SLICE AGREEMENT -- every champion is re-read on each deterministic
+    #     slice of the universe: the fraction of slices on which the body
+    #     was net profitable. Two equal Wilsons are not equal evidence when
+    #     one wins everywhere and the other rides a single slice (Faculty 4:
+    #     belief follows evidence, and INDEPENDENCE is part of the evidence).
+    #     Unmeasured is None, never a 0.0 (the couch lesson, applied to
+    #     independence itself).
+    for _ch in champions:
+        _ch["slice_agreement"] = None
+        try:
+            _slice_rs = []
+            _cg = StrategyGenome.from_dict(_ch)
+            for _s in slice_set:
+                _slice_rs.append(float(evaluator.fit(_cg, _s.pairs).net_r))
+            _ch["slice_agreement"] = zcog_mod.slice_agreement(_slice_rs)
+        except Exception:
+            _ch["slice_agreement"] = None  # a failed read is unmeasured, never a guess
+
+    # (b) THE CALIBRATION LEDGER (Faculty 6): the previous shifts' probation
+    #     labels are graded against tonight's measurements, and tonight's
+    #     labels are filed for the next shift to grade. A label is a
+    #     prediction; the ledger keeps the score; the organism stops lying
+    #     by accident. Fail-open both ways: the instrument is a passenger.
+    calibration_block = {"applied": False, "accuracy": None, "graded": 0,
+                         "policy": "a label is a prediction; the next shift grades it"}
+    if config.calibration:
+        try:
+            _cal = zcog_mod.load_calibration(
+                f"factory_calibration_{config.island}.json")
+            for _ch in champions:
+                try:
+                    calibration_block["graded"] += _cal.score(
+                        signature=str(_ch.get("signature") or ""),
+                        wilson_lb=float(_ch.get("wilson_lb") or 0.0),
+                        ranked=bool(_ch.get("ranked")))
+                except Exception:
+                    pass
+            for _ch in champions:
+                _verdict = (_ch.get("recency") or {}).get("verdict")
+                if _verdict:
+                    _cal.record(shift_id=f"seed={shift_seed}",
+                                signature=str(_ch.get("signature") or ""),
+                                verdict=_verdict,
+                                wilson_lb=float(_ch.get("wilson_lb") or 0.0),
+                                family=str(_ch.get("family") or ""))
+            zcog_mod.save_calibration(
+                _cal, f"factory_calibration_{config.island}.json")
+            calibration_block["applied"] = True
+            calibration_block["accuracy"] = _cal.accuracy()
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+
+    # R103 -- THE ATLAS GROWS: every RANKED body with a measured behavior is
+    # offered to its niche (the couch has no behavior; the unranked carry too
+    # little evidence to map). The offer is the MAP-ELITES rule: a niche
+    # keeps the best Wilson lower bound it has ever seen. The atlas file
+    # rides the heart's commit beside the pantry (the R101 doctrine, one
+    # memory more). The per-row report read is a result-memory hit (the key
+    # is the full-universe one the leaderboard already wrote) -- the atlas
+    # costs nothing the evolution has not already paid.
+    qd_block = {"applied": False, "niches_total": qd_mod.NICHES,
+                "occupied": 0, "coverage": 0.0, "offered": 0, "entered": 0,
+                "policy": "one elite per measured behavior (activity x horizon "
+                          "x direction); MAP-Elites over 36 niches"}
+    if config.qd:
+        try:
+            _atlas = qd_mod.load_archive(f"factory_qd_{config.island}.json")
+            _offers = []
+            for _row in ranked_rows[:max(0, int(config.qd_top))]:
+                try:
+                    _rg = StrategyGenome.from_dict(_row)
+                    _m = evaluator.report(_rg, pairs).metrics
+                    _side_total = int(_m.long_trades) + int(_m.short_trades)
+                    # the direction axis needs the engine's own census: only
+                    # when at least half the trades declared a side is the
+                    # share measured (else the body is direction-unknown --
+                    # not offered, never a guessed leaning)
+                    _share = (float(_m.long_trades) / float(_side_total)
+                              if _side_total >= max(1, int(_m.trades) // 2)
+                              else None)
+                    _desc = qd_mod.descriptor(
+                        trades=_m.trades, avg_bars_held=_m.avg_bars_held,
+                        long_share=_share)
+                    if _desc is None:
+                        continue
+                    _offers.append({
+                        "signature": _row.get("signature"),
+                        "family": _row.get("family"),
+                        "wilson_lb": float(_row.get("wilson_lb") or 0.0),
+                        "net_r": float(_row.get("net_r") or 0.0),
+                        "trades": int(_m.trades),
+                        "behavior": _desc, "genome": _row,
+                        "slice_agreement": _row.get("slice_agreement"),
+                    })
+                except Exception:
+                    continue
+            _entered = _atlas.offer_many(_offers)
+            qd_mod.save_archive(_atlas, f"factory_qd_{config.island}.json")
+            qd_block.update({
+                "applied": True, "offered": len(_offers), "entered": _entered,
+                "occupied": len(_atlas.cells),
+                "coverage": round(_atlas.coverage(), 4),
+            })
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+
     cma_rows: list[dict] = []
     if config.cma and leaderboard:
         for row in leaderboard[:min(5, len(leaderboard))]:
@@ -675,6 +840,7 @@ def run_factory(universe, config: FactoryConfig, *,
             [{"genome": StrategyGenome.from_dict(r).to_dict(),
               "family": r["family"], "wilson_lb": r["wilson_lb"],
               "net_r": r["net_r"],
+              "slice_agreement": r.get("slice_agreement"),
               "recency": r.get("recency")}
              for r in champions],
         ).to_dict()
@@ -722,6 +888,13 @@ def run_factory(universe, config: FactoryConfig, *,
                                "Watchtower's paused families never re-enter"},
         "probation": probation_block,
         "dna": dna_mod.transcribe(champions_refused=champions_refused),
+        "zcognition": zcog_mod.zcognition_block(
+            qd_coverage=qd_block.get("coverage"),
+            calibration=calibration_block.get("accuracy"),
+            slice_agreements=[c.get("slice_agreement") for c in champions],
+            champions=champions),
+        "qd": {**qd_block, "injected": qd_injected, "gated": qd_gated,
+               "dupes": qd_dupes},
         "island": config.island,
         "pairs": list(pairs),
         "population": config.population,
@@ -755,6 +928,7 @@ def run_factory(universe, config: FactoryConfig, *,
         "champions": [
             {"signature": r.get("signature"), "family": r.get("family"),
              "wilson_lb": r.get("wilson_lb"), "net_r": r.get("net_r"),
+             "slice_agreement": r.get("slice_agreement"),
              "recency": (r.get("recency") or {}).get("verdict")}
             for r in champions
         ],

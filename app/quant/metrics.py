@@ -14,6 +14,13 @@ Pre-friction trade is its own net) — the tournament always stamps it.
 A trade is a win when its NET R multiple is positive, a loss when negative, and a
 tie when exactly zero. Ties are reported separately so the counts reconcile:
 ``trades == wins + losses + ties``.
+
+R103 (the behavioral atlas) — the DIRECTION CENSUS: ``long_trades`` and
+``short_trades`` count the trades by the side the engine recorded (a trade's
+``direction`` field, "long"/"short"). They default to 0 so every legacy
+construction stays valid; the atlas reads their SHARE as one measured axis
+of behavior (never a rank key — a direction bias is a DESCRIPTION, not a
+verdict).
 """
 
 from __future__ import annotations
@@ -48,6 +55,9 @@ class MetricsReport:
     gross_r: float = 0.0           # DIAGNOSTIC ONLY (R17) — never ranks
     gross_win_rate: float = 0.0    # DIAGNOSTIC ONLY (R17) — never ranks
     gross_wins: int = 0            # DIAGNOSTIC ONLY (R17) — never ranks
+    # R103 — the direction census (the atlas's third axis; never a rank key).
+    long_trades: int = 0
+    short_trades: int = 0
 
 
 def _max_drawdown_r(r_sequence: list[float]) -> float:
@@ -91,6 +101,8 @@ def aggregate(
             gross_r=0.0,
             gross_win_rate=0.0,
             gross_wins=0,
+            long_trades=0,
+            short_trades=0,
         )
 
     rs = [trade_net_r(t) for t in trades]
@@ -111,6 +123,12 @@ def aggregate(
         bucket["count"] += 1
         bucket["net_r"] += r
 
+    # R103 — the direction census (side by the engine's own record; a trade
+    # with no direction field falls in neither count, and the share of such
+    # strays is visible from trades - (long + short)).
+    long_trades = sum(1 for t in trades if str(getattr(t, "direction", "")) == "long")
+    short_trades = sum(1 for t in trades if str(getattr(t, "direction", "")) == "short")
+
     return MetricsReport(
         trades=n,
         wins=wins,
@@ -130,4 +148,6 @@ def aggregate(
         gross_r=sum(gross),
         gross_win_rate=sum(1 for r in gross if r > 0) / n,
         gross_wins=sum(1 for r in gross if r > 0),
+        long_trades=long_trades,
+        short_trades=short_trades,
     )

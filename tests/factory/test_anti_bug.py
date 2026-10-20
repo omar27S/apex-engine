@@ -95,6 +95,12 @@ def _healthy_ward(tmp_path: Path, *, now: dt.datetime,
     os.utime(backend / "falcon.json", (_stamp, _stamp))
     (backend / "dd_ledger.json").write_text(json.dumps(
         {"nights": [{"date": str(now.date()), "dd_r": 1.5}]}))
+    # THE LIVE WIRE (check 12, born 2026-10-20): a healthy ward carries the
+    # fast eye's FRESH snapshot, stamped at the injected now exactly like the
+    # falcon's reading -- one synthetic clock, two eyes, the same arithmetic.
+    (backend / "hyperfeed.json").write_text(json.dumps(
+        {"schema": 1, "kind": "hyperfeed", "ts": _stamp,
+         "venues": {}, "symbols": {}, "counts": {}}))
     # a real repo so git answers like on the VM
     subprocess.run(["git", "init", "-q"], cwd=backend, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=backend,
@@ -363,6 +369,49 @@ def test_the_guardian_never_dies_on_its_own_gurney():
     report = ab.sweep(_tmp() / "nowhere", runner=_no_machine, write=False)
     assert report["verdict"] in (ab.VERDICT_CLEAN, ab.VERDICT_WOUNDS)
     assert report["checks_run"] == len(ab.CHECKS)
+
+
+# ---------------------------------------------------------------------------
+# THE LIVE WIRE (check 12) -- the fast eye's vital sign
+# ---------------------------------------------------------------------------
+def test_a_quiet_live_wire_is_a_warning_never_a_wound():
+    now = _now()  # 2026-10-22: past the wire's birth, the wire is expected
+    backend = _healthy_ward(_tmp(), now=now)
+    # the wire went quiet 30 minutes ago (its own ts says so)
+    stale = now.timestamp() - 30 * 60
+    (backend / "hyperfeed.json").write_text(json.dumps(
+        {"schema": 1, "ts": stale}))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "hyperfeed_alive")
+    assert not check["ok"]
+    assert check["severity"] == "warn"   # a sleeping sensor, not a lie
+    assert "hyperfeed_alive" in report["warned"]
+    assert "hyperfeed_alive" not in report["failed"]
+    assert report["verdict"] == ab.VERDICT_CLEAN  # warnings do not wound
+
+
+def test_a_fresh_live_wire_rounds_green_and_declares_it():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "hyperfeed.json").write_text(json.dumps(
+        {"schema": 1, "ts": now.timestamp() - 42.0}))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "hyperfeed_alive")
+    assert check["ok"]
+    assert "42" in check["detail"]
+    assert report["verdict"] == ab.VERDICT_CLEAN
+
+
+def test_the_unborn_wire_on_its_birth_day_is_soft():
+    # on 2026-10-20 itself the service may not be installed yet: emptiness,
+    # not a lie (the dd ledger's transition-day doctrine, applied to the eye)
+    now = dt.datetime(2026, 10, 20, 14, 0, tzinfo=dt.timezone.utc)
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "hyperfeed.json").unlink()
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "hyperfeed_alive")
+    assert check["ok"] is True or check["severity"] == "warn"
+    assert "hyperfeed_alive" not in report["failed"]
 
 
 # ---------------------------------------------------------------------------

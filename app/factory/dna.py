@@ -1,10 +1,19 @@
-"""THE DIRECTOR'S DNA -- the twelve laws every agent is born under (v1).
+"""THE DIRECTOR'S DNA -- the twelve laws every agent is born under (v1),
+and, from v2, the six faculties of THINKING sealed in the same helix.
 
 The genome of every agent is numeric -- ema windows, rsi gates, atr multiples.
 But the way agents are BORN, JUDGED, and REMEMBERED is not arithmetic: it is
 law. This module is that law, transcribed once from the Director's method --
 the same method that reanimated a heart dead four days, reopened a cathedral
 collapsed on a rounding hair, and forbade the false receipt.
+
+V2 (2026-10-20, the Boss's transplant order: "metti il tuo dna, cioe tutta
+la tua struttura di pensare") adds the COGNITION to the CONDUCT: six
+faculties transcribed in ``app.factory.zcognition`` -- perception declares
+its darkness; decompose before deciding; hold many hypotheses; belief
+follows evidence; attack the crown before wearing it; every prediction
+scores itself. The laws say how an honest shift BEHAVES; the faculties say
+how an honest mind THINKS. One seal covers both.
 
 The DNA is not decoration. At every factory shift, on every island:
 
@@ -13,7 +22,7 @@ The DNA is not decoration. At every factory shift, on every island:
   counted and reported, never silently dropped;
 * the shift's report carries the TRANSCRIPTION (``report["dna"]``), so the
   living body always knows which laws it evolved under;
-* the ledger's note carries the SEAL (``dna=v1``), so a day's line can always
+* the ledger's note carries the SEAL (``dna=v2``), so a day's line can always
   be read as evidence of the law it was written under.
 
 Read the laws aloud::
@@ -26,9 +35,12 @@ from __future__ import annotations
 import math
 import sys
 
-__all__ = ["DNA_VERSION", "LAWS", "honest_champions", "seal", "transcribe", "main"]
+from app.factory import zcognition as _zcognition
 
-DNA_VERSION = 1
+__all__ = ["DNA_VERSION", "LAWS", "FACULTIES", "honest_champions", "seal",
+           "transcribe", "main"]
+
+DNA_VERSION = 2
 
 LAWS: tuple[dict[str, str], ...] = (
     {
@@ -124,6 +136,12 @@ LAWS: tuple[dict[str, str], ...] = (
 )
 
 
+# The six faculties of THINKING (DNA v2). Defined in app.factory.zcognition
+# so the cognition module owns its own text; re-exported here because the
+# seal is ONE: whoever reads the laws sees the faculties in the same breath.
+FACULTIES = _zcognition.FACULTIES
+
+
 def seal() -> str:
     """The ledger note's seal: one law-line every future row may carry."""
     return f"dna=v{DNA_VERSION}"
@@ -157,6 +175,7 @@ def transcribe(*, champions_refused: int = 0) -> dict:
     return {
         "version": DNA_VERSION,
         "laws": len(LAWS),
+        "faculties": len(FACULTIES),
         "seal": seal(),
         "champions_refused": int(champions_refused),
     }
@@ -164,14 +183,21 @@ def transcribe(*, champions_refused: int = 0) -> dict:
 
 def main() -> int:
     """Read the laws aloud -- for the Boss, for the diary, for anyone."""
-    print(f"THE DIRECTOR'S DNA (v{DNA_VERSION}) -- the twelve laws")
+    print(f"THE DIRECTOR'S DNA (v{DNA_VERSION}) -- the twelve laws,")
+    print(f"and the six faculties of thinking (z-dna v2)")
     print()
     for law in LAWS:
         print(f"Law {law['id']}: {law['name']}")
         print(f"  {law['text']}")
         print(f"  guard: {law['guard']}")
     print()
-    print(f"seal: {seal()}  ({len(LAWS)} laws, transcribed every shift)")
+    for f in FACULTIES:
+        print(f"Faculty {f['id']}: {f['name']}")
+        print(f"  {f['text']}")
+        print(f"  guard: {f['guard']}")
+    print()
+    print(f"seal: {seal()}  ({len(LAWS)} laws + {len(FACULTIES)} faculties, "
+          f"transcribed every shift)")
     return 0
 
 

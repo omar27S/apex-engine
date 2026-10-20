@@ -15,14 +15,17 @@ def test_every_law_names_its_guard():
 
 
 def test_the_seal():
-    assert dna.DNA_VERSION == 1
-    assert dna.seal() == "dna=v1"
+    # v2 (2026-10-20): the twelve laws of conduct are joined in the SAME
+    # seal by the six faculties of thinking (app.factory.zcognition)
+    assert dna.DNA_VERSION == 2
+    assert dna.seal() == "dna=v2"
+    assert len(dna.FACULTIES) == 6
 
 
 def test_transcription_is_honest():
     t = dna.transcribe(champions_refused=2)
-    assert t == {"version": 1, "laws": 12, "seal": "dna=v1",
-                 "champions_refused": 2}
+    assert t == {"version": 2, "laws": 12, "faculties": 6,
+                 "seal": "dna=v2", "champions_refused": 2}
 
 
 def test_measured_zero_is_honest_a_ghost_is_not():

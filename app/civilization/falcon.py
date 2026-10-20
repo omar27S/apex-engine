@@ -40,6 +40,8 @@ __all__ = [
     "pip_size",
     "merge_history",
     "window_motion",
+    "DEAD_PRICE_SOURCES",
+    "wire_revives_dead_pairs",
     "health_from_readings",
     "source_health",
     "source_health_report",
@@ -136,6 +138,79 @@ WIRED_SOURCES: frozenset[str] = frozenset({
 })
 
 # --- THE LIVE WIRE (the hyperfeed's snapshot, honestly read) ---------------
+
+# R116 -- the sources whose price is a DAILY table, not a market: when the
+# wire has a live quote for a pair these sources fed, the wire wins (a
+# synthetic cross at WebSocket speed beats a reference rate published once
+# a day; both are honest, but only one of them is ALIVE).
+DEAD_PRICE_SOURCES: frozenset[str] = frozenset({"frankfurter_ecb", "ecb_sdw"})
+
+
+def wire_revives_dead_pairs(prices: dict, motion: dict, snapshot: dict, *,
+                            now_epoch: float,
+                            max_age_s: float = float(HEALTH_ALIVE_S)
+                            ) -> tuple[dict, dict]:
+    """R116 -- the live wire revives the pairs the dead sources fed (pure).
+
+    EURGBP, EURJPY, EURCHF and EURCAD rode Frankfurter's ECB table for the
+    falcon's whole life: one quote a day, ``volatility_pips: 0.0`` -- a
+    corpse's calm, not the market's. From R111 the wire derives those very
+    crosses live from Kraken's legs; this function lets the wire's reading
+    REPLACE a dead-source pair's price (and carry its MEASURED motion, the
+    unit declared), while a pair a live source already feeds is left alone
+    (the wire does not evict a witness that is awake). A sleeping wire
+    changes nothing -- the falcon keeps its honest fallback.
+
+    Returns ``(prices, motion)`` patched copies; never mutates the inputs.
+    """
+    prices = dict(prices or {})
+    motion = dict(motion or {})
+    if not isinstance(snapshot, dict):
+        return prices, motion
+    ts = snapshot.get("ts")
+    if not isinstance(ts, (int, float)):
+        return prices, motion
+    if float(now_epoch) - float(ts) > max_age_s:
+        return prices, motion           # the wire sleeps: nothing is invented
+    syms = snapshot.get("symbols") or {}
+    from datetime import datetime, timezone as _tz
+
+    def _iso(ts_ms: float) -> str:
+        try:
+            return datetime.fromtimestamp(float(ts_ms) / 1000.0, _tz.utc
+                                          ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (TypeError, ValueError, OSError, OverflowError):
+            return ""
+
+    for sym, blk in syms.items():
+        if not isinstance(blk, dict) or blk.get("mid") is None:
+            continue
+        age = blk.get("age_s")
+        if not isinstance(age, (int, float)) or float(age) > max_age_s:
+            continue                     # a stale symbol is not a reading
+        cur = prices.get(sym) or {}
+        cur_source = str(cur.get("source") or "")
+        if sym in prices and cur_source not in DEAD_PRICE_SOURCES:
+            continue                     # a live witness is never evicted
+        row = {"price": float(blk["mid"]),
+               "ts": _iso(blk.get("ts_ms") or ts * 1000.0),
+               "source": "hyperfeed_wire"}
+        syn = blk.get("synthetic")
+        if isinstance(syn, dict):
+            row["synthetic"] = {"legs": syn.get("legs"),
+                                "op": syn.get("op")}
+        prices[sym] = row
+        m = blk.get("motion")
+        if isinstance(m, dict) and isinstance(m.get("displacement_per_min"),
+                                              (int, float)):
+            motion[sym] = {
+                "volatility_pips": float(m["displacement_per_min"]),
+                "tick_velocity": float(m.get("velocity_per_min") or 0.0),
+                "window_min": float(m.get("span_min") or 0.0),
+                "samples": int(m.get("samples") or 0),
+                "source": f"hyperfeed_wire:{m.get('source', 'ticks')}",
+            }
+    return prices, motion
 
 
 def live_wire_block(snapshot: dict, *, now_epoch: float) -> dict:

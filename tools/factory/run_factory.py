@@ -337,6 +337,7 @@ def main(argv=None) -> int:
               f" champ_in={report.get('champions_injected', 0)}"
               f" champ_out={len(report.get('champions') or [])}"
               f" migrants={report.get('diaspora', {}).get('injected', 0)}"
+              f" wx={(report.get('weather') or {}).get('label') or 'n/m'}"
               f" {report.get('dna', {}).get('seal') or dna_mod.seal()}"),
     )
     ledger_mod.append([], rec, args.ledger)

@@ -441,6 +441,72 @@ def _gating_block(config: FactoryConfig, population) -> dict:
     }
 
 
+def _live_weather(*, path: str = "hyperfeed.json",
+                   now_epoch: float | None = None) -> dict:
+    """R115 -- IL METEO: the live sky this shift evolved under.
+
+    The factory evolves on taped history; from today it also RECORDS the
+    weather the live market wore while it worked (the wire's snapshot, read
+    honestly): the FX majors' median measured motion, the fear gauge's own
+    motion, and a coarse label from FIXED, DECLARED thresholds -- never a
+    learned guess. The weather is OBSERVED, never obeyed: no selection rule
+    reads it yet (that is a future law, and it will need days of this
+    evidence first). A sleeping wire (a CI runner with a stale committed
+    snapshot) is declared sleeping -- the meteo never invents a sky.
+    """
+    # The declared thresholds (pips/min median across the FX majors that
+    # have a measured motion; bp/min for the BTC fear gauge).
+    wind_min, storm_min = 0.40, 1.50
+    quiet_max, tense_max = 3.0, 10.0
+    try:
+        snap = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        snap = None
+    if not isinstance(snap, dict) or not isinstance(snap.get("ts"), (int, float)):
+        return {"state": "absent", "label": None,
+                "reading": "il filo non ha scritto: nessun cielo dichiarato"}
+    now = float(now_epoch if now_epoch is not None else time.time())
+    age_s = max(0.0, now - float(snap["ts"]))
+    alive = float(snap.get("alive_s") or 900)
+    if age_s > alive:
+        return {"state": "sleeping", "snapshot_age_s": round(age_s, 1),
+                "label": None,
+                "reading": f"il filo dorme ({age_s/60.0:.0f} min): meteo sospeso"}
+    syms = snap.get("symbols") or {}
+    fx_motions = []
+    for s in ("EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF"):
+        m = (syms.get(s) or {}).get("motion")
+        if isinstance(m, dict) and isinstance(m.get("displacement_per_min"), (int, float)):
+            fx_motions.append(float(m["displacement_per_min"]))
+    fx_med = (sorted(fx_motions)[len(fx_motions) // 2]
+              if fx_motions else None)
+    label = None
+    if fx_med is not None:
+        label = ("calm" if fx_med < wind_min else
+                 "storm" if fx_med >= storm_min else "wind")
+    btc_m = ((syms.get("BTCUSDT") or {}).get("motion") or {}).get("displacement_per_min")
+    fear = None
+    if isinstance(btc_m, (int, float)):
+        fear = {"btc_bp_per_min": round(float(btc_m), 3),
+                "label": ("quiet" if btc_m < quiet_max else
+                          "panicking" if btc_m >= tense_max else "tense")}
+    counts = snap.get("counts") or {}
+    return {
+        "state": "live", "snapshot_age_s": round(age_s, 1),
+        "fx_median_pips_per_min": (round(fx_med, 3) if fx_med is not None else None),
+        "label": label,
+        "fear": fear,
+        "symbols_moving": counts.get("symbols_moving"),
+        "cross_updates": counts.get("cross_updates"),
+        "thresholds": {"fx_wind_min": wind_min, "fx_storm_min": storm_min,
+                        "fear_tense_max": tense_max},
+        "reading": (f"meteo: {label} "
+                    f"(FX mediana {fx_med:.2f} pip/min su {len(fx_motions)} misurati)"
+                    if fx_med is not None else
+                    "meteo: nessun major con moto misurato (filo giovane)"),
+    }
+
+
 def run_factory(universe, config: FactoryConfig, *,
                 clock=time.monotonic, probation_universe=None) -> dict:
     """Run the factory's bounded reproductive loop and return the honest report.
@@ -1119,6 +1185,7 @@ def run_factory(universe, config: FactoryConfig, *,
                                 "never erases; the diaspora spreads hunters "
                                 "only (R106)"},
         "dna": dna_mod.transcribe(champions_refused=champions_refused),
+        "weather": _live_weather(),   # R115: the sky it evolved under, observed
         "zcognition": zcog_mod.zcognition_block(
             qd_coverage=qd_block.get("coverage"),
             calibration=calibration_block.get("accuracy"),

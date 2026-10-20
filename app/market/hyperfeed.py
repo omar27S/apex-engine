@@ -67,14 +67,16 @@ __all__ = [
     "KRAKEN_WS", "BINANCE_WS", "COINBASE_WS", "OKX_WS",
     "FX_ON_KRAKEN", "CRYPTO_ON_BINANCE", "COINBASE_ON_FEED", "OKX_ON_FEED",
     "CRYPTO_BP_SYMBOLS",
-    "TickBuffer", "BarBuffer", "LatencyMeter", "VenueHealth", "HyperFeedConfig",
-    "HyperFeed", "parse_kraken_ticker", "parse_binance_stream",
+    "TickBuffer", "BarBuffer", "M15Tape", "LatencyMeter", "VenueHealth",
+    "HyperFeedConfig", "HyperFeed",
+    "SYNTHETIC_CROSSES", "cross_quote",
+    "parse_kraken_ticker", "parse_binance_stream",
     "parse_coinbase_ticker", "parse_okx_ticker",
     "pip_size", "motion_unit", "backoff_delay", "snapshot_fresh",
     "run", "main",
 ]
 
-HYPERFEED_VERSION = 2
+HYPERFEED_VERSION = 3  # v3: synthetic crosses (R111) + the live M15 tape (R112)
 
 # R110 -- THE THIRD AND FOURTH EYES (venue redundancy): the crypto gauge
 # rode a single venue -- a Binance outage would blind the fear gauges the
@@ -93,6 +95,40 @@ CRYPTO_BP_SYMBOLS = frozenset({
 # venue product -> internal symbol (the parsers' honest reverse maps)
 _COINBASE_SYMBOL = {v: k for k, v in COINBASE_ON_FEED.items()}
 _OKX_SYMBOL = {v: k for k, v in OKX_ON_FEED.items()}
+
+# R111 -- THE SYNTHETIC CROSSES (le croci vive): four of the falcon's FX
+# pairs rode Frankfurter's ECB daily table (one quote a day, honest but DEAD --
+# a volatility of 0.0 for 45 minutes is not calm, it is a corpse). The legs of
+# every one of those crosses quote LIVE on Kraken at WebSocket speed, and the
+# triangle is arithmetic, not opinion:
+#
+#     EURGBP = EURUSD / GBPUSD        EURJPY = EURUSD x USDJPY
+#     EURCHF = EURUSD / USDCHF        EURCAD = EURUSD x USDCAD
+#     AUDJPY = AUDUSD x USDJPY        GBPJPY = GBPUSD x USDJPY
+#
+# The spread is quoted HONEST-WIDEST (a ratio's bid is num_bid/den_ask, its
+# ask num_ask/den_bid -- the cross spread carries both legs' costs, never a
+# pretend penny); the stamp is the OLDER leg's (evidence cannot be younger
+# than the older fact it is built from); and the symbol block DECLARES itself
+# synthetic with its legs, so no downstream eye mistakes a derived price for
+# an exchange's own quote. AUDJPY is here because the signal organ's five
+# operational pairs include it -- the cross makes the whole constellation
+# livable from Kraken alone.
+SYNTHETIC_CROSSES: dict[str, tuple[str, str, str]] = {
+    "EURGBP": ("EURUSD", "GBPUSD", "div"),
+    "EURJPY": ("EURUSD", "USDJPY", "mul"),
+    "EURCHF": ("EURUSD", "USDCHF", "div"),
+    "EURCAD": ("EURUSD", "USDCAD", "mul"),
+    "AUDJPY": ("AUDUSD", "USDJPY", "mul"),
+    "GBPJPY": ("GBPUSD", "USDJPY", "mul"),
+}
+# Which crosses a leg feeds (the derivation's reverse index).
+_CROSSES_BY_LEG: dict[str, tuple[str, ...]] = {}
+for _x, (_a, _b, _op) in SYNTHETIC_CROSSES.items():
+    _CROSSES_BY_LEG.setdefault(_a, ())
+    _CROSSES_BY_LEG.setdefault(_b, ())
+    _CROSSES_BY_LEG[_a] = _CROSSES_BY_LEG[_a] + (_x,)
+    _CROSSES_BY_LEG[_b] = _CROSSES_BY_LEG[_b] + (_x,)
 
 # A snapshot older than this is a wire gone quiet (the guardian's clock).
 HYPERFEED_ALIVE_S = 900
@@ -415,6 +451,162 @@ class BarBuffer:
         return out
 
 
+# ---------------------------------------------------------------------------
+# THE LIVE TAPE -- every closed M15 bar, persisted (R112)
+# ---------------------------------------------------------------------------
+class M15Tape:
+    """R112 -- THE LIVE TAPE (il nastro vivo): the eye grows a memory.
+
+    The wound this tape closes (2026-10-21): the signal organ asked the
+    PRESENT market for entries while reading a parquet history that ended
+    NINE DAYS before -- the eye was alive, the mouth spoke of a market that
+    no longer existed. This tape is the nerve: every tick the wire sees
+    folds into its symbol's open M15 bucket, and the moment a newer bucket
+    opens (or the grace clock closes a quiet one) the CLOSED bar is appended
+    to a JSONL file the signal organ can read -- the same
+    ``open/high/low/close`` shape the parquet history speaks (``open_ms``
+    is the bar's open epoch; the reader renames and stitches), so the deep
+    past and the living present become one honest frame.
+
+    Honesty rules (the Director's laws, at tape resolution):
+
+    * LATE TICKS NEVER REWRITE (Law 2) -- a tick for a bucket older than
+      the open one is refused and counted (``late_refused``); history is
+      evidence, not a draft;
+    * DEAD MINUTES ARE EMPTY (Law 7) -- a bucket that never heard a tick
+      writes NO bar (a gap in the tape is an honest gap, never a flat bar);
+    * IDEMPOTENT ACROSS RESTARTS (Law 12) -- on birth the tape reads its
+      own tail and refuses to write any bar at or before the last one it
+      already wrote (the daemon may die mid-minute; the tape never repeats
+      itself);
+    * PROVENANCE RIDES EVERY BAR -- each line names its ``source`` (the
+      venue, or ``synthetic`` for the crosses), so a reader can always say
+      which eye saw what.
+    """
+
+    __slots__ = ("path", "bucket_s", "grace_s", "_open", "_last_ms",
+                 "bars_written", "late_refused", "torn_tail")
+
+    def __init__(self, path, *, bucket_s: int = 900, grace_s: float = 60.0):
+        self.path = Path(path) if path else None
+        self.bucket_s = int(bucket_s)
+        self.grace_s = float(grace_s)
+        self._open: dict[str, dict] = {}
+        self._last_ms: dict[str, int] = {}
+        self.bars_written = 0
+        self.late_refused = 0
+        self.torn_tail = 0
+        if self.path is not None:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                self.path = None
+                return
+            self._read_tail()
+
+    # -- the tail (idempotence's memory) ----------------------------------
+    def _read_tail(self) -> None:
+        """Remember the last bar each symbol already has (torn lines skipped)."""
+        if self.path is None or not self.path.exists():
+            return
+        try:
+            with self.path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        self.torn_tail += 1  # a crash mid-write: skipped, counted
+                        continue
+                    if not isinstance(row, dict) or row.get("kind") != "m15_bar":
+                        continue
+                    sym, om = row.get("symbol"), row.get("open_ms")
+                    if isinstance(sym, str) and isinstance(om, int):
+                        self._last_ms[sym] = max(self._last_ms.get(sym, 0), om)
+        except OSError:
+            pass  # an unreadable tape is an empty one, honestly
+
+    def _bucket_ms(self, ts_ms: float) -> int:
+        step = self.bucket_s * 1000
+        return (int(ts_ms) // step) * step
+
+    # -- the fold ----------------------------------------------------------
+    def fold(self, symbol: str, ts_ms: float, price: float, source: str) -> bool:
+        """Fold one price into its symbol's open bucket. ``True`` when heard."""
+        if self.path is None:
+            return False
+        try:
+            p = float(price)
+            b = self._bucket_ms(float(ts_ms))
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(p):
+            return False
+        st = self._open.get(symbol)
+        if st is None:
+            self._open[symbol] = {"open_ms": b, "o": p, "h": p, "l": p,
+                                  "c": p, "n": 1, "source": str(source)}
+            return True
+        if b < st["open_ms"]:
+            self.late_refused += 1
+            return False  # history is not a draft
+        if b == st["open_ms"]:
+            st["c"] = p
+            if p > st["h"]:
+                st["h"] = p
+            if p < st["l"]:
+                st["l"] = p
+            st["n"] += 1
+            return True
+        self._close(symbol, st)                # a newer bucket: the old is done
+        self._open[symbol] = {"open_ms": b, "o": p, "h": p, "l": p,
+                              "c": p, "n": 1, "source": str(source)}
+        return True
+
+    def flush(self, now_ms: float, *, grace_s: float | None = None) -> list[str]:
+        """Close every bucket whose end + grace is past. Empty stays empty."""
+        grace = self.grace_s if grace_s is None else float(grace_s)
+        closed: list[str] = []
+        for sym in list(self._open):
+            st = self._open[sym]
+            end_ms = st["open_ms"] + self.bucket_s * 1000
+            if end_ms + grace * 1000.0 <= float(now_ms):
+                self._close(sym, st)
+                closed.append(sym)
+        return closed
+
+    def _close(self, symbol: str, st: dict) -> None:
+        self._open.pop(symbol, None)
+        om = int(st["open_ms"])
+        # -1 is "never written": epoch 0 is a REAL bar (1970-01-01 00:00 UTC),
+        # and the first bar of a young tape must not be strangled by a zero default.
+        if om <= int(self._last_ms.get(symbol, -1)):
+            return  # already written before a restart: idempotent, never repeated
+        row = {"schema": 1, "kind": "m15_bar", "symbol": symbol,
+               "open_ms": om, "close_ms": om + self.bucket_s * 1000,
+               "o": round(float(st["o"]), 8), "h": round(float(st["h"]), 8),
+               "l": round(float(st["l"]), 8), "c": round(float(st["c"]), 8),
+               "n": int(st["n"]), "source": str(st["source"])}
+        try:
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+            self._last_ms[symbol] = om
+            self.bars_written += 1
+        except OSError:
+            pass  # a failed write is counted by the daemon's clock, never fabricated
+
+    def stats(self) -> dict:
+        """The honest tape block for the snapshot."""
+        return {"path": (str(self.path) if self.path is not None else None),
+                "bucket_s": self.bucket_s,
+                "bars_written": int(self.bars_written),
+                "late_refused": int(self.late_refused),
+                "torn_tail": int(self.torn_tail),
+                "open_buckets": len(self._open)}
+
+
 class LatencyMeter:
     """A bounded reservoir of (local_clock - exchange_clock) milliseconds.
 
@@ -656,6 +848,11 @@ class HyperFeedConfig:
     crypto_symbols: tuple[str, ...] = tuple(CRYPTO_ON_BINANCE)
     coinbase_symbols: tuple[str, ...] = tuple(COINBASE_ON_FEED)   # R110
     okx_symbols: tuple[str, ...] = tuple(OKX_ON_FEED)             # R110
+    cross_symbols: tuple[str, ...] = tuple(SYNTHETIC_CROSSES)     # R111
+    cross_max_leg_age_s: float = 10.0   # R111: a leg older than this is not a pair
+    tape_path: str = ""                # R112: empty = no tape (tests, library use)
+    tape_bucket_s: int = 900           # the M15 the whole organism thinks in
+    tape_grace_s: float = 60.0         # a quiet bucket closes this late, honestly
     buffer_capacity: int = 4096
     bar_capacity: int = 4096   # R105: 68 min of one-second bars at ANY rate
     snapshot_path: str = "hyperfeed.json"
@@ -664,6 +861,30 @@ class HyperFeedConfig:
     ping_timeout_s: float = 20.0
     max_backoff_s: float = 60.0
     alive_s: float = float(HYPERFEED_ALIVE_S)
+
+
+def cross_quote(a_bid: float, a_ask: float, b_bid: float, b_ask: float,
+                *, op: str = "div") -> tuple[float, float] | None:
+    """R111 -- the honest triangular cross of two bid/ask books.
+
+    ``mul``: bid = a_bid * b_bid, ask = a_ask * b_ask (the product's spread
+    carries both). ``div``: bid = a_bid / b_ask, ask = a_ask / b_bid (the
+    ratio's spread is the WIDEST honest one -- both legs' costs paid, never
+    a pretend penny). ``None`` when the arithmetic is not finite (a zero
+    denominator is blindness, not a free cross).
+    """
+    try:
+        if op == "mul":
+            bid = float(a_bid) * float(b_bid)
+            ask = float(a_ask) * float(b_ask)
+        else:
+            bid = float(a_bid) / float(b_ask)
+            ask = float(a_ask) / float(b_bid)
+    except (TypeError, ZeroDivisionError, ValueError):
+        return None
+    if not (math.isfinite(bid) and math.isfinite(ask)) or bid <= 0 or ask <= 0:
+        return None
+    return bid, ask
 
 
 class HyperFeed:
@@ -692,6 +913,19 @@ class HyperFeed:
         for sym in self.config.okx_symbols:
             self.buffers.setdefault(sym, TickBuffer(self.config.buffer_capacity))
             self.bars.setdefault(sym, BarBuffer(self.config.bar_capacity))
+        # R111 -- the crosses' rings (separate books, declared synthetic)
+        self.cross_counts: dict[str, int] = {}
+        for sym in self.config.cross_symbols:
+            if sym in SYNTHETIC_CROSSES:
+                self.buffers.setdefault(sym, TickBuffer(self.config.buffer_capacity))
+                self.bars.setdefault(sym, BarBuffer(self.config.bar_capacity))
+                self.cross_counts[sym] = 0
+        # R112 -- the live tape (the eye's memory; None when disabled)
+        self.tape: M15Tape | None = None
+        if self.config.tape_path:
+            self.tape = M15Tape(self.config.tape_path,
+                                bucket_s=self.config.tape_bucket_s,
+                                grace_s=self.config.tape_grace_s)
         self.venues: dict[str, VenueHealth] = {
             "kraken": VenueHealth("kraken"), "binance": VenueHealth("binance"),
             "coinbase": VenueHealth("coinbase"), "okx": VenueHealth("okx"),
@@ -706,6 +940,10 @@ class HyperFeed:
         A book quote (bid+ask) writes the book; a trade (price) writes the
         tape as a synthetic book (bid=ask=price, declared in the snapshot's
         ``trade_fed`` list -- a trade-tick is not a spread reading).
+        R111: a raw quote also feeds the crosses whose legs it is (fresh
+        legs only, honest-widest spread, the older leg's stamp). R112: every
+        price the wire hears folds into the live M15 tape, its provenance
+        riding the bar it will close.
         """
         now_ms = float(now_ms if now_ms is not None else time.time() * 1000.0)
         ring = self.buffers.get(symbol)
@@ -715,21 +953,67 @@ class HyperFeed:
         bars = self.bars.get(symbol)
         if bid is not None and ask is not None:
             stamp = float(ts_ms if ts_ms is not None else now_ms)
+            mid = (float(bid) + float(ask)) / 2.0
             ring.append(stamp, float(bid), float(ask))
             if bars is not None:
-                bars.fold(stamp, (float(bid) + float(ask)) / 2.0)
+                bars.fold(stamp, mid)
+            if self.tape is not None:
+                self.tape.fold(symbol, stamp, mid, venue)
         elif price is not None:
             stamp = float(ts_ms if ts_ms is not None else now_ms)
             ring.append(stamp, float(price), float(price))
             if bars is not None:
                 bars.fold(stamp, float(price))
+            if self.tape is not None:
+                self.tape.fold(symbol, stamp, float(price), venue)
         else:
             return False
         if health is not None:
             health.on_msg(now_ms, ticks=1)
             if latency_ms is not None:
                 health.latency.observe(latency_ms)
+        self._derive_crosses(symbol, now_ms=now_ms)
         return True
+
+    def _derive_crosses(self, leg: str, *, now_ms: float) -> None:
+        """R111 -- refresh every cross this leg feeds (fresh legs only).
+
+        A cross is born ONLY when BOTH legs spoke within
+        ``cross_max_leg_age_s``: a stale leg is not a pair (Law 1 -- no
+        measurement, no speech). The derived quote carries the OLDER leg's
+        stamp (evidence cannot be younger than the older fact it is built
+        from) and is counted per cross in ``cross_counts`` -- declared, never
+        mistaken for a venue's own tick.
+        """
+        crosses = _CROSSES_BY_LEG.get(leg)
+        if not crosses:
+            return
+        for cross in crosses:
+            if cross not in self.buffers or cross not in SYNTHETIC_CROSSES:
+                continue
+            a, b, op = SYNTHETIC_CROSSES[cross]
+            ra, rb = self.buffers.get(a), self.buffers.get(b)
+            if ra is None or rb is None:
+                continue
+            la, lb = ra.last(), rb.last()
+            if la is None or lb is None:
+                continue
+            max_age = float(self.config.cross_max_leg_age_s) * 1000.0
+            if (now_ms - la["ts_ms"]) > max_age or (now_ms - lb["ts_ms"]) > max_age:
+                continue  # a stale leg is not a pair
+            qa = cross_quote(la["bid"], la["ask"], lb["bid"], lb["ask"], op=op)
+            if qa is None:
+                continue
+            bid, ask = qa
+            stamp = min(la["ts_ms"], lb["ts_ms"])   # the older fact governs
+            mid = (bid + ask) / 2.0
+            self.buffers[cross].append(stamp, bid, ask)
+            cbars = self.bars.get(cross)
+            if cbars is not None:
+                cbars.fold(stamp, mid)
+            if self.tape is not None:
+                self.tape.fold(cross, stamp, mid, "synthetic")
+            self.cross_counts[cross] = self.cross_counts.get(cross, 0) + 1
 
     # -- the reductions -----------------------------------------------------
     def symbol_block(self, symbol: str, *, now_ms: float) -> dict:
@@ -746,6 +1030,10 @@ class HyperFeed:
         unit, denom = motion_unit(symbol)
         block = ring.snapshot(now_ms=now_ms)
         block["unit"] = unit
+        if symbol in SYNTHETIC_CROSSES:
+            a, b, _op = SYNTHETIC_CROSSES[symbol]
+            block["synthetic"] = {"legs": [a, b], "op": _op,
+                                  "updates": int(self.cross_counts.get(symbol, 0))}
         if "ts_ms" in block:
             motion = ring.motion(unit=unit, denom=denom)
             if motion is not None:
@@ -778,12 +1066,19 @@ class HyperFeed:
                 "symbols_configured": len(self.buffers),
                 "symbols_seen": len(seen),
                 "symbols_moving": len(moving),
+                "symbols_synthetic": int(self.cross_counts and
+                                         sum(1 for s in self.cross_counts
+                                             if symbols.get(s, {}).get("mid") is not None)),
+                "cross_updates": int(sum(self.cross_counts.values())),
                 "ticks_written": sum(b.written for b in self.buffers.values()),
                 "bars_written": sum(len(b) for b in self.bars.values()),
             },
+            "tape": (self.tape.stats() if self.tape is not None
+                      else {"path": None, "bars_written": 0}),
             "reading": (f"live wire: {len(seen)}/{len(self.buffers)} symbols seen, "
                         f"{len(moving)} with measured motion "
-                        f"(tick eye first, bar eye at any rate)"),
+                        f"(tick eye first, bar eye at any rate; "
+                        f"{len(self.cross_counts)} crosses derived)"),
         }
 
 
@@ -1017,9 +1312,15 @@ async def _venue_loop(feed: HyperFeed, cfg: HyperFeedConfig, name: str,
 
 
 async def _snapshot_writer(feed: HyperFeed, cfg: HyperFeedConfig, stop: asyncio.Event):
-    """The file's heartbeat: one atomic snapshot every ``snapshot_every_s``."""
+    """The file's heartbeat: one atomic snapshot every ``snapshot_every_s``.
+
+    R112: the same beat closes the tape's quiet buckets (a bar whose wire
+    went silent is still evidence -- it closes ``grace_s`` late, honestly).
+    """
     path = Path(cfg.snapshot_path)
     while not stop.is_set():
+        if feed.tape is not None:
+            feed.tape.flush(time.time() * 1000.0)
         _write_snapshot_atomic(path, feed.snapshot())
         try:
             await asyncio.wait_for(stop.wait(), timeout=float(cfg.snapshot_every_s))
@@ -1085,6 +1386,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="bounded measurement window; prints the honest snapshot")
     ap.add_argument("--snapshot", default="hyperfeed.json",
                     help="the snapshot path (default: hyperfeed.json)")
+    ap.add_argument("--tape", default="data/live/tape_m15.jsonl",
+                    help="R112: the live M15 tape (empty string disables it)")
     ap.add_argument("--buffer", type=int, default=4096,
                     help="ticks remembered per symbol (default: 4096)")
     ap.add_argument("--quiet", action="store_true",
@@ -1092,6 +1395,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     cfg = HyperFeedConfig(snapshot_path=args.snapshot,
+                          tape_path=str(args.tape or ""),
                           buffer_capacity=int(args.buffer))
 
     try:  # the faster loop, when the host carries it

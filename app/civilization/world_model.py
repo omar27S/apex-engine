@@ -189,10 +189,18 @@ def score_prophecy(entry: dict, *, realized: dict | None) -> dict:
     ``realized`` may carry ``trend_up`` (bool), ``regime_shift`` (bool), and
     ``major_move`` (bool). The verdict credits each branch that called it correctly
     (a probability >= 0.5 that matched, or < 0.5 that did not happen).
+
+    R117 -- THE PROPHECY'S MIRROR: the verdict alone is a coin's honesty (a
+    0.51 that came true and a 0.99 that came true both "hit"); the BRIER
+    score is the probability's honesty -- the mean squared gap between each
+    spoken probability and the 0/1 that happened (0 = a prophet, 0.25 = a
+    coin, worse = confidence without sight). Both ride the entry: the
+    verdict for the ear, the Brier for the truth.
     """
     if not realized:
         return entry
     hits: list[bool] = []
+    sq: list[float] = []
     checks = (("p_trend_up", "trend_up"), ("p_regime_shift", "regime_shift"),
               ("p_major_move", "major_move"))
     for pkey, rkey in checks:
@@ -201,8 +209,10 @@ def score_prophecy(entry: dict, *, realized: dict | None) -> dict:
         if p is None or r is None:
             continue
         hits.append((p >= 0.5) == bool(r))
+        sq.append((float(p) - (1.0 if r else 0.0)) ** 2)
     entry["realized"] = realized
     entry["verdict"] = (round(sum(hits) / len(hits), 3) if hits else None)
+    entry["brier"] = (round(sum(sq) / len(sq), 4) if sq else None)
     return entry
 
 
@@ -210,12 +220,20 @@ def calibration(entries: list[dict]) -> dict:
     """Aggregate the prophecy ledger into a calibration reading.
 
     Honest: only SCORED prophecies count; with none, the hit rate is None (never a
-    fabricated 0% or 100%).
+    fabricated 0% or 100%). R117: the mean Brier rides beside the hit rate --
+    the hit rate says how often the coin landed, the Brier says how much the
+    probabilities deserved to be believed.
     """
     scored = [e for e in entries if e.get("verdict") is not None]
     if not scored:
-        return {"n": 0, "hit_rate": None, "reading": "calibrazione non misurata"}
+        return {"n": 0, "hit_rate": None, "mean_brier": None,
+                "reading": "calibrazione non misurata"}
     hit = sum(float(e["verdict"]) for e in scored) / len(scored)
+    briers = [float(e["brier"]) for e in scored
+              if isinstance(e.get("brier"), (int, float))]
+    mean_brier = (round(sum(briers) / len(briers), 4) if briers else None)
+    reading = (f"profezie: {len(scored)} giudicate, accuratezza {hit:.0%}"
+               + (f", Brier {mean_brier:.3f} (0 profeta / 0.25 moneta)"
+                  if mean_brier is not None else ""))
     return {"n": len(scored), "hit_rate": round(hit, 3),
-            "reading": (f"profezie: {len(scored)} giudicate, "
-                        f"accuratezza {hit:.0%}")}
+            "mean_brier": mean_brier, "reading": reading}

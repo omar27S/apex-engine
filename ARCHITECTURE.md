@@ -37,19 +37,25 @@ APEX/
 1. `git pull --rebase --autostash` (the CEO may have pushed law or tapes)
 2. resolve the island (R98 wheel: heart -> turbo -> vault, one per
    ledger line) and the rotating seed (R92: seed + 7919 x lines)
-3. draw 240 genomes (gating honoured, champions injected from the
-   island's pantry -- a champion without a measure is refused, Law 3)
-4. **the living funnel (R97)**: round one keeps the living variety
+3. the guardian's round (R102: eleven checks, quarantine-heal of a torn
+   pantry -- the physician is a passenger, never a gate)
+4. draw 240 genomes (gating honoured, champions injected from the
+   island's pantry -- a champion without a measure is refused, Law 3;
+   the OTHER islands' best ride beside them, R99 the diaspora,
+   cap pop//8, the Watchtower's paused families never re-enter)
+5. **the living funnel (R97)**: round one keeps the living variety
    (top-60% graded by trades/wilson/net on the cheap pair -- life
    first); round two is the full judgement (ranked floor + the sealed
    3x friction gate, now seated where the invoice is full)
-5. breed generations (elite, crossover, mutation, EDA memory, polish,
+6. breed generations (elite, crossover, mutation, EDA memory, polish,
    CMA) -- only ranked bodies (min_trades on the full universe) can be
    crowned: **a couch is never a champion**
-6. the nine seats (R96): up to 9 distinct-realm champions enter the
-   pantry `factory_champions_{island}.json`; the migration (R68) can
-   carry them across islands
-7. append one honest line to `factory_ledger.jsonl` (sealed with the
+7. the nine seats (R96): up to 9 distinct-realm champions enter the
+   pantry `factory_champions_{island}.json` -- each one re-measured on
+   the most recent window first (R100 the recency probation: confirmed /
+   probation / couch, labels never erasures); the migration (R68) and
+   the diaspora (R99) carry genes across islands
+8. append one honest line to `factory_ledger.jsonl` (sealed with the
    DNA: `dna=v1`), commit and push -- the CEO's phone sees the beat
 
 ## THE MIND (every night, apex-grand at 04:04)
@@ -95,6 +101,7 @@ market's night and the heart's harvest -- from real numbers.
 | unit | cadence | role |
 | --- | --- | --- |
 | `apex-heart.timer` | 3h | one bounded factory shift |
+| `apex-guardian.timer` | 30 min | the anti-bug guardian's round (R102: eleven checks, quarantine-heal) |
 | `apex-grand.timer` | 04:04 | the night's Grand batch + the letter |
 | `apex-falcon.timer` | 15m | the market eye |
 | `apex-flow.timer` / `apex-web-watch.timer` | hourly | the flow and the watch |

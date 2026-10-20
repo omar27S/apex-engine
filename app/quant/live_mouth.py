@@ -258,7 +258,13 @@ def resolve_open(candidate: dict, bars: list[dict], *,
       ``outcome_r = -1.0`` (the unit every organ already thinks in);
     * neither within ``horizon_bars`` -> ``expired``: marked to the last
       walked close, ``outcome_r`` = signed distance in R -- the position's
-      honest mark, never a zombie left open forever.
+      honest mark. Expiry fires ONLY when the walk has SEEN the whole
+      horizon (a 15-minute-old candidate with one bar walked is STILL
+      OPEN, not expired -- the live wound of 23:15 UTC, 2026-10-20, where
+      forty-one newborn words were "expired" by one bar, fixed the same
+      hour);
+    * fewer bars than the horizon and no hit -> ``None``: the market has
+      not finished speaking.
     """
     if not isinstance(candidate, dict):
         return None
@@ -291,12 +297,14 @@ def resolve_open(candidate: dict, bars: list[dict], *,
         if hit_t:
             return {"outcome": "target", "outcome_r": float(target_rr or 0.0),
                     "resolved_ts": b["ts"], "bars_held": walk.index(b) + 1}
-    if walk:
+    if len(walk) >= max(1, int(horizon_bars)):
+        # the horizon is EXHAUSTED without a hit: the honest end, marked to
+        # the last close (a young walk is not an end -- the word stays open)
         last_close = walk[-1]["close"]
         moved = (last_close - entry) * direction
         return {"outcome": "expired", "outcome_r": round(moved / float(stop_d), 4),
                 "resolved_ts": walk[-1]["ts"], "bars_held": len(walk)}
-    return None  # the market has not spoken yet (no bars after birth)
+    return None  # the market has not finished speaking yet
 
 
 def resolve_many(candidates: list[dict], bars_by_pair: dict[str, list[dict]],

@@ -32,6 +32,34 @@ from app.quant import frames as fr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# R98 — THE ISLAND WHEEL. The architecture declares three islands (heart, turbo,
+# vault -- 240 bodies x 3 = the 720 the Boss was promised); the shift config
+# now says "auto" and the wheel takes its turn per shift: every island breeds
+# on its own pantry, no island starved, the migration (R68) carries genes
+# across. The rotation key is the ledger's honest line count -- the SAME key
+# the rotating seed (R92) uses, so island and seed never disagree about which
+# shift this is.
+ISLAND_WHEEL = ("heart", "turbo", "vault")
+
+
+def _resolve_island(spec: str, ledger_path: str) -> str:
+    """Resolve the shift's island: 'auto' rides the wheel, a name is the law.
+
+    Deterministic and measurable: the wheel advances one island per ledger
+    line (a missing ledger starts at heart). An unknown island name passes
+    through untouched -- the caller's word is law (the ledger's validator
+    remains the gatekeeper of the known world).
+    """
+    spec = str(spec or "heart").strip().lower()
+    if spec != "auto":
+        return spec
+    try:
+        p = Path(ledger_path)
+        n = sum(1 for _ in p.open()) if p.exists() else 0
+    except OSError:
+        n = 0
+    return ISLAND_WHEEL[n % len(ISLAND_WHEEL)]
+
 
 def _load_config(path: str | None) -> dict:
     if not path:
@@ -116,7 +144,10 @@ def main(argv=None) -> int:
     ap.add_argument("--slice-salt", default=cfg.get("slice_salt", ""))
     ap.add_argument("--ensemble-quota", type=float,
                     default=float(cfg.get("ensemble_quota", 0.25)))
-    ap.add_argument("--island", default=cfg.get("island", "heart"))
+    ap.add_argument("--island", default=cfg.get("island", "heart"),
+                    help="the breeding island this shift -- a name, or 'auto' "
+                         "to ride the R98 island wheel (heart -> turbo -> "
+                         "vault, one island per ledger line)")
     ap.add_argument("--screen-pair", default=cfg.get("screen_pair", ""))
     ap.add_argument("--out", default=cfg.get("out", "data/history/.factory_run.json"))
     ap.add_argument("--no-polish", dest="polish", action="store_false",
@@ -150,6 +181,9 @@ def main(argv=None) -> int:
         print("no data — nothing to run", file=sys.stderr)
         return 1
 
+    # R98 — the island wheel: 'auto' becomes a real island before anything else.
+    island = _resolve_island(args.island, args.ledger)
+
     cfg_obj = FactoryConfig(
         pairs=tuple(sorted(universe)),
         directed=_load_directed(args.directed),
@@ -162,7 +196,7 @@ def main(argv=None) -> int:
         ensemble_quota=args.ensemble_quota, n_slices=args.n_slices,
         slice_salt=args.slice_salt, polish=bool(args.polish), cma=bool(args.cma),
         staircase=bool(args.staircase), screen_pair=args.screen_pair,
-        island=args.island,
+        island=island,
         rotate_seed=bool(cfg.get("rotate_seed", False)),
     )
     report = run_factory(universe, cfg_obj)
@@ -172,7 +206,7 @@ def main(argv=None) -> int:
     # R66 — append the honest factory-ledger record.
     date = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
     rec = ledger_mod.FactoryRecord(
-        date=date, machine=args.island, job=cfg.get("job", "factory-run"),
+        date=date, machine=island, job=cfg.get("job", "factory-run"),
         trials=int(report["trials"]),
         machine_seconds=float(report["wallclock_seconds"]),
         cache_hits=int(report["result_memory"]["hits"]),
@@ -186,7 +220,7 @@ def main(argv=None) -> int:
     ledger_mod.append([], rec, args.ledger)
 
     print(json.dumps({
-        "machine": args.island, "trials": report["trials"],
+        "machine": island, "trials": report["trials"],
         "genomes_scored": report["genomes_scored"],
         "wallclock_seconds": report["wallclock_seconds"],
         "staircase": report["staircase"],

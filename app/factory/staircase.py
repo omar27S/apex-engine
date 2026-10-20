@@ -75,6 +75,12 @@ class StaircaseResult:
     rounds_run: int = 0
     friction_rejected: int = 0            # R85 — count rejected by the gate
     friction_reasons: dict = field(default_factory=dict)  # R85 — reason -> count
+    # R97 — THE LIVING FUNNEL: round one keeps the living variety (a top-K of the
+    # graded pool), and the gate judges where the invoice is full. Both report
+    # themselves here; a silent reconfiguration is forbidden.
+    relative_keep: int = 0
+    relative_applied: bool = False
+    gate_round: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -89,6 +95,10 @@ class StaircaseResult:
                 "rejected": self.friction_rejected,
                 "reasons": dict(sorted(self.friction_reasons.items())),
             },
+            # R97 — the living funnel's honest bookkeeping.
+            "relative": {"applied": self.relative_applied,
+                         "keep": self.relative_keep},
+            "gate_round": self.gate_round,
         }
 
 
@@ -110,7 +120,8 @@ class FrictionGate:
         return gross_to_friction_verdict(self.gross_r, self.gross_r - self.friction_r)
 
 
-def screen(pool, evaluators, *, rounds=STAIRCASE_ROUNDS, friction_gate=None) -> StaircaseResult:
+def screen(pool, evaluators, *, rounds=STAIRCASE_ROUNDS, friction_gate=None,
+           relative=None, gate_round=0) -> StaircaseResult:
     """Run the progressive screen.
 
     ``pool`` is an iterable of genomes. ``evaluators`` maps a round NAME to a
@@ -119,9 +130,21 @@ def screen(pool, evaluators, *, rounds=STAIRCASE_ROUNDS, friction_gate=None) -> 
     the previous round's survivors.
 
     R85: when ``friction_gate`` is supplied it is a callable ``genome -> FrictionGate
-    | None`` consulted at the FIRST round (the cheap screen). ``None`` means the
-    gate did not speak (no data — do not block); a returned gate that fails the
-    sealed verdict rejects the genome and its reason is counted for the report.
+    | None`` consulted at round ``gate_round`` (0-based; the cheap screen by
+    default, exactly as before). ``None`` means the gate did not speak (no data —
+    do not block); a returned gate that fails the sealed verdict rejects the
+    genome and its reason is counted for the report.
+
+    R97 — THE LIVING FUNNEL. ``relative`` (optional) is a mapping
+    ``{"keep": int, "graded": callable}``: when supplied, round one does NOT
+    pass life-or-death judgement per body; it ORDERS the pool by
+    ``graded(genome)`` (best-first, a tuple key, ties broken by the stable sort's
+    pool order) and keeps the top ``keep``. Round one becomes a cost funnel that
+    preserves the living variety — measured on the cheap pair, never a verdict —
+    while the merit is judged where the information is full: the later rounds,
+    where the friction gate (``gate_round``) and the ranked floor decide. An
+    absolute round-one bar that kills 240/240 random bodies is not selection;
+    it is extinction, and extinction cannot breed.
     """
     specs = tuple(rounds)
     if not specs:
@@ -134,19 +157,51 @@ def screen(pool, evaluators, *, rounds=STAIRCASE_ROUNDS, friction_gate=None) -> 
             )
 
     current = list(pool)
-    result = StaircaseResult()
-    for spec in specs:
+    result = StaircaseResult(gate_round=int(gate_round))
+    for index, spec in enumerate(specs):
         result.entered[spec.name] = len(current)
         if not current:
             result.passed[spec.name] = 0
             break
         fn = evaluators[spec.name]
         survivors = []
+        # R97 — round one, the LIVING FUNNEL: order by the graded key, keep the
+        # top ``keep``. No body is judged here; the variety survives to be judged
+        # where the tape is full. The gate does not speak at this round (its
+        # round is ``gate_round``; when that is 0 it judges AFTER the cut, below).
+        if index == 0 and relative and callable(relative.get("graded")):
+            keep = max(0, int(relative.get("keep", 0)))
+            graded = relative["graded"]
+            ordered = sorted(current, key=graded, reverse=True)
+            survivors = ordered[:keep]
+            result.relative_keep = keep
+            result.relative_applied = True
+            result.passed[spec.name] = len(survivors)
+            result.rounds_run += 1
+            current = survivors
+            if int(gate_round) != 0 or not callable(friction_gate):
+                continue
+            # gate_round == 0 with a relative round one: the gate judges the
+            # KEPT bodies before they spend the expensive rounds.
+            kept = []
+            for g in survivors:
+                gate = friction_gate(g)
+                if gate is not None:
+                    v = gate.verdict()
+                    if not v.ok:
+                        result.friction_rejected += 1
+                        key = f"gross={v.gross_r:.1f}|friction={v.friction_r:.1f}|{v.reason}"
+                        result.friction_reasons[key] = result.friction_reasons.get(key, 0) + 1
+                        continue
+                kept.append(g)
+            result.passed[spec.name] = len(kept)
+            current = kept
+            continue
         for g in current:
-            # R85 — the gross-to-friction gate applies at round 1 only. It runs
-            # before the (still cheap) round-1 evaluation, so a body that cannot
-            # pay friction never spends even the screen.
-            if spec is specs[0] and callable(friction_gate):
+            # R85 — the gross-to-friction gate applies at its round. It runs
+            # before the round's evaluation, so a body that cannot pay friction
+            # never spends even the cheap screen.
+            if index == int(gate_round) and callable(friction_gate):
                 gate = friction_gate(g)
                 if gate is not None:
                     v = gate.verdict()

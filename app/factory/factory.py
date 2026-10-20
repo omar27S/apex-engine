@@ -95,6 +95,13 @@ class FactoryConfig:
     # aside for the pantry and the migration. Fewer occupied realms yield
     # fewer champions (empty seats stay empty; no placeholder, R20/R21 spirit).
     champion_seats: int = 9
+    # R97 — THE LIVING FUNNEL: the share of the pool round one lets THROUGH to
+    # the full judgement (the top graded ``keep`` bodies; life first, merit in
+    # the full rounds). 1.0 = everything passes round one. Measured need: the
+    # absolute round-one bar (30+ trades on the cheap pair AND gross >= 3x
+    # friction) killed 240/240 random bodies for days -- extinction, not
+    # selection; an extinct pool cannot breed.
+    screen_survival: float = 0.6
 
     def signature(self) -> str:
         blob = json.dumps(
@@ -107,6 +114,7 @@ class FactoryConfig:
                 "cma": self.cma, "staircase": self.staircase,
                 "layers_quota": self.layers_quota,
                 "champion_seats": self.champion_seats,
+                "screen_survival": self.screen_survival,
                 "regime_gating": self.regime_gating,
             },
             sort_keys=True, default=str,
@@ -311,6 +319,10 @@ def run_factory(universe, config: FactoryConfig, *,
             _n = 0
         shift_seed = (config.seed + 7919 * (_n + 1)) % (1 << 30)
     rng = np.random.default_rng(shift_seed)
+    if not (0.0 < float(config.screen_survival) <= 1.0):
+        raise ValueError(
+            "screen_survival must be in (0, 1] — the funnel keeps at least one "
+            "living body and never more than the whole pool (fail-closed)")
     memory = rm_mod.ResultMemory()
     evaluator = _Evaluator(universe, config.min_trades, memory)
     eda_mem = eda_mod.GeneMemory()
@@ -372,25 +384,39 @@ def run_factory(universe, config: FactoryConfig, *,
             polish_deltas.append(pr.to_dict())
         population.append(g)
 
-    # R69 — screen the whole pool cheaply before the full evaluation.
+    # R69/R97 — screen the whole pool: round one keeps the living variety, the
+    # full rounds judge the merit.
+    funnel_block = {"applied": False, "survival": config.screen_survival,
+                    "keep": 0, "pool": len(population)}
     if config.staircase:
-        # R85 — the gross-to-friction gate at round 1. It reads the SAME cheap
-        # screen slice the round-1 evaluator uses (the result memory makes this
-        # free — no second evaluation), and refuses a candidate whose gross edge
-        # cannot pay 3x the friction it was invoiced. No data -> the gate stays
-        # silent (None), never blocking.
-        def _friction_gate(genome):
-            m = evaluator.report(genome, cheap_pairs).metrics
+        # R97 — THE LIVING FUNNEL. Round one grades the pool on the CHEAP pair
+        # with life first: (trades, wilson_lb, net_r) — a body that never trades
+        # sinks to the bottom, a living body rises regardless of its merit; the
+        # merit is NOT judged here. The top ``keep`` pass. The R85 friction gate
+        # moves to round two (the "era"), where the invoice is FULL (all pairs)
+        # and the result memory makes the re-read free -- the sealed 3x law is
+        # unchanged, only its seat in the funnel moves: judging 240 random
+        # bodies on a cheap single-pair invoice killed the evolution for days.
+        def _friction_gate_full(genome):
+            m = evaluator.report(genome, pairs).metrics
             if m.trades <= 0:
                 return None
             return staircase_mod.FrictionGate(gross_r=m.gross_r,
                                               friction_r=m.gross_r - m.net_r)
 
-        scr = staircase_mod.screen(population, staircase, friction_gate=_friction_gate)
+        def _graded(genome):
+            fit = evaluator.fit(genome, cheap_pairs)
+            return (int(fit.trades), float(fit.wilson_lb), float(fit.net_r))
+
+        keep = max(1, int(round(len(population) * float(config.screen_survival))))
+        scr = staircase_mod.screen(
+            population, staircase, friction_gate=_friction_gate_full,
+            gate_round=1, relative={"keep": keep, "graded": _graded})
         screened = scr.survivors
         staircase_ledger = scr.to_dict()
         staircase_ledger["screened_out_before_full_eval"] = (
             len(population) - len(screened))
+        funnel_block.update({"applied": True, "keep": keep})
     else:
         screened = population
         staircase_ledger = {"rounds_run": 0, "survivors": len(population)}
@@ -485,14 +511,24 @@ def run_factory(universe, config: FactoryConfig, *,
         row = g.to_dict()
         row.update({
             "signature": g.signature(), "family": g.family,
+            "ranked": bool(f.ranked),
             "wilson_lb": round(float(f.wilson_lb), 4),
             "net_r": round(float(f.net_r), 4), "trades": int(f.trades),
         })
         leaderboard.append(row)
 
-    realm_census = realms_mod.census(leaderboard)
+    # R97 — A COUCH IS NEVER A CHAMPION: only bodies with enough evidence
+    # (min_trades on the full universe) sit in realms, hold thrones or enter
+    # the pantry. The old leaderboard let a no-trade body (wilson 0.0, net 0.0)
+    # outrank every honest loser and be crowned -- the pantry held seven couches
+    # for days. The couch is not "worst"; it is UNKNOWN (the doctrine's own
+    # words), and the unknown is never crowned. The full leaderboard stays in
+    # the report (diagnostic, couches visible and counted); the CENSUS and the
+    # SEATS see only the measured.
+    ranked_rows = [r for r in leaderboard if r.get("ranked")]
+    realm_census = realms_mod.census(ranked_rows)
     champions = realms_mod.distinct_realm_champions(
-        leaderboard, seats=config.champion_seats)
+        ranked_rows, seats=config.champion_seats)
 
     cma_rows: list[dict] = []
     if config.cma and leaderboard:
@@ -512,7 +548,18 @@ def run_factory(universe, config: FactoryConfig, *,
         ).to_dict()
     else:
         migration = {"exported": False,
-                     "reason": "no realm champion cleared the rank floor"}
+                     "reason": "no ranked body cleared the floor this shift "
+                               "(R97: the couch is never crowned)"}
+
+    # R97 — the honest funnel report: what round one kept, how many couches
+    # rode the pool, how many bodies carried real evidence to the end.
+    funnel_block.update({
+        "pool": len(population),
+        "no_trade_final": sum(1 for r in leaderboard if int(r.get("trades") or 0) == 0),
+        "ranked_final": len(ranked_rows),
+        "gate_round": "era",
+        "graded_key": "(trades, wilson_lb, net_r) on the cheap pair — life first",
+    })
 
     # R91 -- persist this shift's champions for the NEXT shift's generation 0
     # (the evolution's memory; committed like the ledger it grows beside).
@@ -549,6 +596,7 @@ def run_factory(universe, config: FactoryConfig, *,
             "slices": [s.to_dict() for s in slice_set],
         },
         "staircase": staircase_ledger,
+        "funnel": funnel_block,
         "result_memory": memory.stats(),
         "eda_memory": {"families_learned": len(eda_mem.snapshot()),
                        "snapshot": eda_mem.snapshot()},

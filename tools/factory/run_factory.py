@@ -136,6 +136,10 @@ def main(argv=None) -> int:
                     default=int(cfg.get("champion_seats", 9)),
                     help="R96: the pantry's breadth -- distinct-realm "
                          "champions per shift")
+    ap.add_argument("--screen-survival", type=float,
+                    default=float(cfg.get("screen_survival", 0.6)),
+                    help="R97: the living funnel -- the share of the pool round "
+                         "one lets through to the full judgement (0, 1]")
     ap.add_argument("--ledger", default=cfg.get("ledger", "factory_ledger.jsonl"),
                     help="R66: the honest band ledger this run appends to")
     args = ap.parse_args(argv)
@@ -152,6 +156,7 @@ def main(argv=None) -> int:
         regime_gating=_load_gating(args.state),
         layers_quota=args.layers_quota,
         champion_seats=args.champion_seats,
+        screen_survival=args.screen_survival,
         population=args.population, generations=args.generations, elite=args.elite,
         min_trades=args.min_trades, seed=args.seed,
         ensemble_quota=args.ensemble_quota, n_slices=args.n_slices,

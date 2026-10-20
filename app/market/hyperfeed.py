@@ -64,14 +64,35 @@ import numpy as np
 
 __all__ = [
     "HYPERFEED_VERSION", "HYPERFEED_ALIVE_S", "MOTION_MIN_SPAN_S",
-    "KRAKEN_WS", "BINANCE_WS", "FX_ON_KRAKEN", "CRYPTO_ON_BINANCE",
+    "KRAKEN_WS", "BINANCE_WS", "COINBASE_WS", "OKX_WS",
+    "FX_ON_KRAKEN", "CRYPTO_ON_BINANCE", "COINBASE_ON_FEED", "OKX_ON_FEED",
+    "CRYPTO_BP_SYMBOLS",
     "TickBuffer", "BarBuffer", "LatencyMeter", "VenueHealth", "HyperFeedConfig",
     "HyperFeed", "parse_kraken_ticker", "parse_binance_stream",
+    "parse_coinbase_ticker", "parse_okx_ticker",
     "pip_size", "motion_unit", "backoff_delay", "snapshot_fresh",
     "run", "main",
 ]
 
 HYPERFEED_VERSION = 2
+
+# R110 -- THE THIRD AND FOURTH EYES (venue redundancy): the crypto gauge
+# rode a single venue -- a Binance outage would blind the fear gauges the
+# whole wire was built to see. Coinbase and OKX are keyless, public, and
+# feed SEPARATE rings under honest names (BTC-USD is not BTC-USDT: the
+# basis between venues is information, never noise to be merged).
+COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"
+COINBASE_ON_FEED: dict[str, str] = {"BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD"}
+OKX_WS = "wss://ws.okx.com:8443/ws/v5/public"
+OKX_ON_FEED: dict[str, str] = {"BTCOKX": "BTC-USDT", "ETHOKX": "ETH-USDT"}
+# The explicit crypto set (basis-point pricing); the suffix rule stays for
+# anything the set has not met yet (an honest default, not a cage).
+CRYPTO_BP_SYMBOLS = frozenset({
+    "EURUSDT", "BTCUSDT", "ETHUSDT", "BTCUSD", "ETHUSD", "BTCOKX", "ETHOKX",
+})
+# venue product -> internal symbol (the parsers' honest reverse maps)
+_COINBASE_SYMBOL = {v: k for k, v in COINBASE_ON_FEED.items()}
+_OKX_SYMBOL = {v: k for k, v in OKX_ON_FEED.items()}
 
 # A snapshot older than this is a wire gone quiet (the guardian's clock).
 HYPERFEED_ALIVE_S = 900
@@ -113,9 +134,12 @@ def motion_unit(symbol: str) -> tuple[str, float]:
     Returns ``(unit_name, denominator)``: FX divides the price path by the
     pip; crypto divides the RELATIVE path by 1e-4 (a "pip" of a 60,000 BTC
     quote would be meaningless, a basis point is the same idea at any scale).
+    R110 -- venue-specific crypto names (BTCUSD on Coinbase, BTCOKX on OKX)
+    are priced by the explicit set, never by guessing from the suffix.
     """
     s = str(symbol).upper()
-    if s.endswith("USDT") or s.endswith("USD") and s not in FX_ON_KRAKEN:
+    if s in CRYPTO_BP_SYMBOLS or (
+            (s.endswith("USDT") or s.endswith("USD")) and s not in FX_ON_KRAKEN):
         return "bp", 1e-4  # relative: path / price * 1e4
     return "pip", pip_size(s)
 
@@ -550,6 +574,65 @@ def parse_binance_stream(msg: dict, *, now_ms: float | None = None) -> list[dict
     return rows
 
 
+def parse_coinbase_ticker(msg: dict, *, now_ms: float | None = None) -> list[dict]:
+    """R110 -- THE THIRD EYE: Coinbase's ticker channel (keyless, public).
+
+    Payload shape (the docs' own words, prices as STRINGS -- the Binance
+    lesson paid twice): ``{"type": "ticker", "product_id": "BTC-USD",
+    "best_bid": "61234.50", "best_ask": "61235.00",
+    "time": "2026-10-20T19:00:00.123456Z"}``. The time is ISO-stamped (the
+    honest clock); a ticker without its book or its product is counted by
+    the venue health and never fabricated.
+    """
+    if not isinstance(msg, dict) or msg.get("type") != "ticker":
+        return []
+    sym = _COINBASE_SYMBOL.get(str(msg.get("product_id") or ""))
+    if not sym:
+        return []
+    bid, ask = _num(msg.get("best_bid")), _num(msg.get("best_ask"))
+    if bid is None or ask is None:
+        return []
+    ts_ms = _iso_to_ms(msg.get("time"))
+    latency = None
+    if ts_ms is not None and now_ms is not None:
+        latency = float(now_ms) - float(ts_ms)
+    return [{"symbol": sym, "bid": bid, "ask": ask,
+             "ts_ms": ts_ms, "latency_ms": latency}]
+
+
+def parse_okx_ticker(msg: dict, *, now_ms: float | None = None) -> list[dict]:
+    """R110 -- THE FOURTH EYE: OKX v5 public tickers (keyless).
+
+    Payload shape: ``{"arg": {"channel": "tickers", "instId": "BTC-USDT"},
+    "data": [{"last": "61234.5", "bidPx": "61234.4", "askPx": "61234.6",
+    "ts": "1761000000000"}]}`` -- the ts is a STRING of epoch milliseconds
+    (numeric strings parse through :func:`_num` like every venue's quotes).
+    """
+    if not isinstance(msg, dict):
+        return []
+    data = msg.get("data")
+    if not isinstance(data, list):
+        return []
+    arg = msg.get("arg") if isinstance(msg.get("arg"), dict) else {}
+    sym = _OKX_SYMBOL.get(str(arg.get("instId") or ""))
+    if not sym:
+        return []
+    rows = []
+    for d in data:
+        if not isinstance(d, dict):
+            continue
+        bid, ask = _num(d.get("bidPx")), _num(d.get("askPx"))
+        if bid is None or ask is None:
+            continue
+        ts_ms = _num(d.get("ts"))
+        latency = None
+        if ts_ms is not None and now_ms is not None:
+            latency = float(now_ms) - float(ts_ms)
+        rows.append({"symbol": sym, "bid": bid, "ask": ask,
+                     "ts_ms": ts_ms, "latency_ms": latency})
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # THE AGGREGATOR
 # ---------------------------------------------------------------------------
@@ -571,6 +654,8 @@ class HyperFeedConfig:
     """Everything the wire needs (bounded, honest, overridable per run)."""
     fx_pairs: tuple[str, ...] = tuple(FX_ON_KRAKEN)
     crypto_symbols: tuple[str, ...] = tuple(CRYPTO_ON_BINANCE)
+    coinbase_symbols: tuple[str, ...] = tuple(COINBASE_ON_FEED)   # R110
+    okx_symbols: tuple[str, ...] = tuple(OKX_ON_FEED)             # R110
     buffer_capacity: int = 4096
     bar_capacity: int = 4096   # R105: 68 min of one-second bars at ANY rate
     snapshot_path: str = "hyperfeed.json"
@@ -599,8 +684,18 @@ class HyperFeed:
         for sym in self.config.crypto_symbols:
             self.buffers.setdefault(sym, TickBuffer(self.config.buffer_capacity))
             self.bars.setdefault(sym, BarBuffer(self.config.bar_capacity))
+        # R110 -- the third and fourth eyes' rings (separate names, separate
+        # books: the basis between venues is information, never merged noise)
+        for sym in self.config.coinbase_symbols:
+            self.buffers.setdefault(sym, TickBuffer(self.config.buffer_capacity))
+            self.bars.setdefault(sym, BarBuffer(self.config.bar_capacity))
+        for sym in self.config.okx_symbols:
+            self.buffers.setdefault(sym, TickBuffer(self.config.buffer_capacity))
+            self.bars.setdefault(sym, BarBuffer(self.config.bar_capacity))
         self.venues: dict[str, VenueHealth] = {
-            "kraken": VenueHealth("kraken"), "binance": VenueHealth("binance")}
+            "kraken": VenueHealth("kraken"), "binance": VenueHealth("binance"),
+            "coinbase": VenueHealth("coinbase"), "okx": VenueHealth("okx"),
+        }
 
     # -- the ingestion ------------------------------------------------------
     def on_quote(self, venue: str, symbol: str, *, bid=None, ask=None,
@@ -789,6 +884,111 @@ async def _binance_session(feed: HyperFeed, cfg: HyperFeedConfig, stop: asyncio.
                               latency_ms=r.get("latency_ms"), now_ms=now_ms)
 
 
+async def _coinbase_session(feed: HyperFeed, cfg: HyperFeedConfig, stop: asyncio.Event):
+    """R110 -- the third eye: Coinbase's ticker channel, one session."""
+    import websockets
+
+    health = feed.venues["coinbase"]
+    products = [COINBASE_ON_FEED[p] for p in cfg.coinbase_symbols
+                if p in COINBASE_ON_FEED]
+    if not products:
+        health.state = "sleeping"          # configured out: honest rest,
+        await stop.wait()                    # never a hot reconnect loop
+        return
+    sub = json.dumps({"type": "subscribe", "product_ids": products,
+                      "channels": ["ticker"]})
+    loads = _json_loader()
+    async with websockets.connect(COINBASE_WS, open_timeout=cfg.connect_timeout_s,
+                                  ping_interval=20, ping_timeout=cfg.ping_timeout_s) as ws:
+        health.state, health.connected_at_ms = "live", time.time() * 1000.0
+        await ws.send(sub)
+        async for raw in ws:
+            if stop.is_set():
+                await ws.close()
+                break
+            now_ms = time.time() * 1000.0
+            try:
+                msg = loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("type") == "error":
+                health.errors.append(f"subscribe refused: {str(msg.get('message'))[:100]}")
+                continue
+            rows = parse_coinbase_ticker(msg, now_ms=now_ms)
+            if not rows:
+                health.on_msg(now_ms)
+                continue
+            for r in rows:
+                feed.on_quote("coinbase", r["symbol"], bid=r["bid"], ask=r["ask"],
+                              ts_ms=r.get("ts_ms"), latency_ms=r.get("latency_ms"),
+                              now_ms=now_ms)
+
+
+async def _okx_session(feed: HyperFeed, cfg: HyperFeedConfig, stop: asyncio.Event):
+    """R110 -- the fourth eye: OKX v5 public tickers, one session.
+
+    OKX speaks an APPLICATION-level heartbeat (a bare ``"ping"`` text every
+    ~20 s; the server answers ``"pong"`` and drops the socket after ~30 s of
+    silence) -- the WS protocol-level ping the other venues take is not the
+    word this venue hears, so the session speaks its dialect honestly.
+    """
+    import websockets
+
+    health = feed.venues["okx"]
+    args = [{"channel": "tickers", "instId": OKX_ON_FEED[p]}
+            for p in cfg.okx_symbols if p in OKX_ON_FEED]
+    if not args:
+        health.state = "sleeping"
+        await stop.wait()
+        return
+    sub = json.dumps({"op": "subscribe", "args": args})
+    loads = _json_loader()
+    async with websockets.connect(OKX_WS, open_timeout=cfg.connect_timeout_s,
+                                  ping_interval=None) as ws:
+        health.state, health.connected_at_ms = "live", time.time() * 1000.0
+        await ws.send(sub)
+
+        async def _heartbeat():
+            while not stop.is_set():
+                await asyncio.sleep(20)
+                try:
+                    await ws.send("ping")
+                except Exception:
+                    return
+
+        hb = asyncio.create_task(_heartbeat(), name="hyperfeed-okx-hb")
+        try:
+            async for raw in ws:
+                if stop.is_set():
+                    await ws.close()
+                    break
+                if raw == "pong" or raw == "":
+                    continue
+                now_ms = time.time() * 1000.0
+                try:
+                    msg = loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                ev = msg.get("event")
+                if ev == "error":
+                    health.errors.append(f"subscribe refused: {str(msg.get('msg'))[:100]}")
+                    continue
+                rows = parse_okx_ticker(msg, now_ms=now_ms)
+                if not rows:
+                    health.on_msg(now_ms)
+                    continue
+                for r in rows:
+                    feed.on_quote("okx", r["symbol"], bid=r["bid"], ask=r["ask"],
+                                  ts_ms=r.get("ts_ms"), latency_ms=r.get("latency_ms"),
+                                  now_ms=now_ms)
+        finally:
+            hb.cancel()
+
+
 async def _venue_loop(feed: HyperFeed, cfg: HyperFeedConfig, name: str,
                       session, stop: asyncio.Event, *, healthy_s: float = 60.0):
     """The reconnecting wrapper: one venue, forever, with honest backoff."""
@@ -860,6 +1060,10 @@ async def run(cfg: HyperFeedConfig | None = None, *, seconds: float | None = Non
                             name="hyperfeed-kraken"),
         asyncio.create_task(_venue_loop(feed, cfg, "binance", _binance_session, stop),
                             name="hyperfeed-binance"),
+        asyncio.create_task(_venue_loop(feed, cfg, "coinbase", _coinbase_session, stop),
+                            name="hyperfeed-coinbase"),
+        asyncio.create_task(_venue_loop(feed, cfg, "okx", _okx_session, stop),
+                            name="hyperfeed-okx"),
         asyncio.create_task(_snapshot_writer(feed, cfg, stop),
                             name="hyperfeed-snapshot"),
         asyncio.create_task(_bounded(), name="hyperfeed-clock"),

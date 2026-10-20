@@ -744,7 +744,15 @@ def run_factory(universe, config: FactoryConfig, *,
     #     prediction; the ledger keeps the score; the organism stops lying
     #     by accident. Fail-open both ways: the instrument is a passenger.
     calibration_block = {"applied": False, "accuracy": None, "graded": 0,
+                         "published": False,
                          "policy": "a label is a prediction; the next shift grades it"}
+    # THE PUBLICATION GATE (the D3 lesson, applied at birth): the memory files
+    # are published for the REAL islands only (heart/turbo/vault). A test
+    # island evolves in memory and dies with its run -- its map may never
+    # land in the working tree (the wound this gate closes was caught on the
+    # first live round: factory_qd_test.json and _revolution.json appeared
+    # beside the real memories, one VM death away from being committed).
+    _publish = config.island in islands_mod.ISLAND_WHEEL
     if config.calibration:
         try:
             _cal = zcog_mod.load_calibration(
@@ -765,9 +773,11 @@ def run_factory(universe, config: FactoryConfig, *,
                                 verdict=_verdict,
                                 wilson_lb=float(_ch.get("wilson_lb") or 0.0),
                                 family=str(_ch.get("family") or ""))
-            zcog_mod.save_calibration(
-                _cal, f"factory_calibration_{config.island}.json")
+            if _publish:
+                zcog_mod.save_calibration(
+                    _cal, f"factory_calibration_{config.island}.json")
             calibration_block["applied"] = True
+            calibration_block["published"] = bool(_publish)
             calibration_block["accuracy"] = _cal.accuracy()
         except (OSError, ValueError, TypeError, KeyError):
             pass
@@ -782,6 +792,7 @@ def run_factory(universe, config: FactoryConfig, *,
     # costs nothing the evolution has not already paid.
     qd_block = {"applied": False, "niches_total": qd_mod.NICHES,
                 "occupied": 0, "coverage": 0.0, "offered": 0, "entered": 0,
+                "published": False,
                 "policy": "one elite per measured behavior (activity x horizon "
                           "x direction); MAP-Elites over 36 niches"}
     if config.qd:
@@ -817,11 +828,13 @@ def run_factory(universe, config: FactoryConfig, *,
                 except Exception:
                     continue
             _entered = _atlas.offer_many(_offers)
-            qd_mod.save_archive(_atlas, f"factory_qd_{config.island}.json")
+            if _publish:
+                qd_mod.save_archive(_atlas, f"factory_qd_{config.island}.json")
             qd_block.update({
                 "applied": True, "offered": len(_offers), "entered": _entered,
                 "occupied": len(_atlas.cells),
                 "coverage": round(_atlas.coverage(), 4),
+                "published": bool(_publish),
             })
         except (OSError, ValueError, TypeError, KeyError):
             pass

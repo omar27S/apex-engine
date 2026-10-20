@@ -132,3 +132,52 @@ class TestArchive:
         atlas.offer(_entry())
         blob = json.dumps(atlas.to_dict())
         assert json.loads(blob)["niches_total"] == qd.NICHES
+
+
+class TestPublicationGate:
+    """THE PUBLICATION GATE (the D3 lesson, applied at the atlas's birth).
+
+    The first live round caught it: a factory test island (``test``,
+    ``revolution``) left ``factory_qd_test.json`` beside the real memories in
+    the working tree -- one heartbeat away from being committed as state. The
+    gate: the atlas and the calibration are PUBLISHED for the real islands
+    (heart/turbo/vault) only; a test island evolves in memory and dies with
+    its run.
+    """
+
+    def test_a_test_island_publishes_nothing(self, tmp_path, monkeypatch):
+        import numpy as np
+        import pandas as pd
+        from app.core.pairs import PAIR_PIP
+        from app.quant import frames as fr
+        from app.factory.factory import FactoryConfig, run_factory
+        from app.factory.islands import ISLAND_WHEEL
+
+        rng = np.random.default_rng(7)
+        rows = 400
+        steps = rng.normal(0, 0.0008, rows)
+        close = 1.1000 + np.cumsum(steps)
+        open_ = np.r_[close[0], close[:-1]]
+        high = np.maximum(open_, close) + rng.uniform(0.0001, 0.0012, rows)
+        low = np.minimum(open_, close) - rng.uniform(0.0001, 0.0012, rows)
+        ts = 1546380000 + np.arange(rows) * 900
+        tape = pd.DataFrame({"ts": ts, "open": open_, "high": high, "low": low,
+                             "close": close, "volume": np.full(rows, 300.0)})
+        universe = {"EURUSD": fr.build_frames(tape, "EURUSD", PAIR_PIP["EURUSD"])}
+
+        monkeypatch.chdir(tmp_path)  # belt and braces: nothing lands anywhere
+        config = FactoryConfig(pairs=("EURUSD",), population=8, generations=1,
+                               elite=3, min_trades=1, seed=3, polish=False,
+                               cma=False, staircase=False,
+                               ensemble_quota=0.0, screen_pair="EURUSD",
+                               island="test")
+        assert "test" not in ISLAND_WHEEL  # the premise: a test island is not real
+        report = run_factory(universe, config)
+        # the evolution RAN (the atlas applied, in memory) but PUBLISHED nothing:
+        # the qd block says so, and no memory file landed anywhere near the tree
+        assert report["qd"]["applied"] is True
+        assert report["qd"]["published"] is False
+        assert "zcognition" in report  # the cognition rode the report (Faculty 6)
+        assert not (tmp_path / "factory_qd_test.json").exists()
+        assert not (tmp_path / "factory_calibration_test.json").exists()
+        assert not (tmp_path / "factory_champions_test.json").exists()

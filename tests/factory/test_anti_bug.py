@@ -33,17 +33,28 @@ from app.factory import islands as islands_mod  # noqa: E402
 # the synthetic ward: a healthy tree, one file per sign
 # ---------------------------------------------------------------------------
 class Machine:
-    """A recording runner: git is real (a true mini repo), df/systemctl talk."""
+    """A recording runner: git is real (a true mini repo), df/systemctl talk.
 
-    def __init__(self, *, free_mb="99999", timer="enabled"):
+    R109 made the guardian ask EVERY organ's clock (four timers is-enabled +
+    the live wire's service is-active); the mock answers each question with
+    its own dial: ``timer`` for the timers, ``service`` for the always-on
+    wire (default healthy: 'active').
+    """
+
+    def __init__(self, *, free_mb="99999", timer="enabled", service="active"):
         self.free_mb = free_mb
         self.timer = timer
+        self.service = service
 
     def __call__(self, cmd, cwd=None):
         head = cmd[0]
         if head == "df":
             return 0, f"Avail\n{self.free_mb}\n"
         if head == "systemctl":
+            if "is-active" in cmd:
+                if self.service == "active":
+                    return 0, "active\n"
+                return 3, f"inactive\n"
             if self.timer == "enabled":
                 return 0, "enabled\n"
             return 1, f"Failed to enable unit: {self.timer}\n"

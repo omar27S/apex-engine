@@ -65,13 +65,13 @@ import numpy as np
 __all__ = [
     "HYPERFEED_VERSION", "HYPERFEED_ALIVE_S", "MOTION_MIN_SPAN_S",
     "KRAKEN_WS", "BINANCE_WS", "FX_ON_KRAKEN", "CRYPTO_ON_BINANCE",
-    "TickBuffer", "LatencyMeter", "VenueHealth", "HyperFeedConfig",
+    "TickBuffer", "BarBuffer", "LatencyMeter", "VenueHealth", "HyperFeedConfig",
     "HyperFeed", "parse_kraken_ticker", "parse_binance_stream",
     "pip_size", "motion_unit", "backoff_delay", "snapshot_fresh",
     "run", "main",
 ]
 
-HYPERFEED_VERSION = 1
+HYPERFEED_VERSION = 2
 
 # A snapshot older than this is a wire gone quiet (the guardian's clock).
 HYPERFEED_ALIVE_S = 900
@@ -254,6 +254,143 @@ class TickBuffer:
 # ---------------------------------------------------------------------------
 # THE CLOCK'S RECEIPT -- latency, measured only when the exchange sends one
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# THE MACRO RING -- one bar per second, bounded at ANY tick rate (R105)
+# ---------------------------------------------------------------------------
+class BarBuffer:
+    """The telescope beside the microscope: one bar per second of mids.
+
+    The wound this ring closes (2026-10-20, the first live day): BTCUSDT
+    ticks at ~423/s and fills the 4096-slot tick ring in under ten seconds
+    -- the law window (MOTION_MIN_SPAN_S = 240 s) is forever beyond the
+    microscope's reach, so the fastest symbol in the book was the one whose
+    motion could never be measured (an honest ``None``, forever). The cure
+    is not a bigger microscope (memory grows with the tick rate) but a
+    SECOND memory at a coarser resolution: every tick folds into its
+    second's bar, and 4096 bars hold 68 minutes at any rate the venue sends.
+
+    Honesty rules (the same laws, at bar resolution):
+
+    * a LATE tick (second older than the open bar) is counted by the
+      microscope but never rewrites a closed bar -- history is evidence,
+      not a draft;
+    * DEAD seconds are honest emptiness: the ring never fabricates flat
+      bars to bridge a gap, and the span counts remembered seconds only;
+    * motion on bars is LABELLED ``source: "bars"`` -- a coarser, real
+      measurement of the same window, never a pose as tick resolution.
+    """
+
+    __slots__ = ("capacity", "_sec", "_close", "_high", "_low", "_n",
+                 "_head", "_written", "_folded")
+
+    def __init__(self, capacity: int = 4096):
+        self.capacity = max(64, int(capacity))
+        self._sec = np.zeros(self.capacity, dtype="int64")
+        self._close = np.full(self.capacity, np.nan)
+        self._high = np.full(self.capacity, np.nan)
+        self._low = np.full(self.capacity, np.nan)
+        self._n = np.zeros(self.capacity, dtype="int32")
+        self._head = 0
+        self._written = 0
+        self._folded = 0   # every tick the telescope accepted (a total, not a window)
+
+    def fold(self, ts_ms: float, mid: float) -> bool:
+        """Fold one mid into its second's bar. ``True`` when the ring heard it.
+
+        A tick for a second OLDER than the open bar is refused (``False``):
+        the microscope holds it, the telescope does not rewrite history.
+        """
+        try:
+            sec = int(ts_ms) // 1000
+            v = float(mid)
+        except (TypeError, ValueError):
+            return False
+        if not (np.isfinite(v) and np.isfinite(sec)):
+            return False
+        if self._written:
+            i = (self._head - 1) % self.capacity
+            if sec < int(self._sec[i]):
+                return False  # late: history stays as it was written
+            if sec == int(self._sec[i]):
+                self._close[i] = v
+                if v > self._high[i]:
+                    self._high[i] = v
+                if v < self._low[i]:
+                    self._low[i] = v
+                self._n[i] += 1
+                self._folded += 1
+                return True
+        i = self._head
+        self._sec[i] = sec
+        self._close[i] = v
+        self._high[i] = v
+        self._low[i] = v
+        self._n[i] = 1
+        self._head = (i + 1) % self.capacity
+        self._written += 1
+        self._folded += 1
+        return True
+
+    def __len__(self) -> int:
+        return min(self._written, self.capacity)
+
+    def _view(self, arr: np.ndarray) -> np.ndarray:
+        if self._written <= self.capacity:
+            return arr[:self._head]
+        return np.concatenate((arr[self._head:], arr[:self._head]))
+
+    def span_s(self) -> float | None:
+        """Newest minus oldest REMEMBERED second (gaps included, honestly)."""
+        n = len(self)
+        if n < 1:
+            return None
+        sec = self._view(self._sec)
+        return float(sec[-1] - sec[0])
+
+    def motion(self, *, min_span_s: float = MOTION_MIN_SPAN_S,
+               unit: str = "pip", denom: float = 1e-4) -> dict | None:
+        """The law window's motion at one-second resolution.
+
+        Same laws as :meth:`TickBuffer.motion`, same fields, one more:
+        ``source: "bars"``. The rhythm (``velocity_per_min``) counts DISTINCT
+        CLOSES -- the market's one-second heartbeat, not the sensor's cadence.
+        """
+        n = len(self)
+        if n < 2:
+            return None
+        sec = self._view(self._sec)
+        close = self._view(self._close)
+        span_s = float(sec[-1] - sec[0])
+        if span_s < float(min_span_s) or span_s <= 0.0:
+            return None
+        minutes = span_s / 60.0
+        if unit == "bp":
+            scale = lambda d: float(d) / max(float(close[0]), 1e-12) / denom
+        else:
+            scale = lambda d: float(d) / denom
+        disp = abs(float(close[-1]) - float(close[0]))
+        path = float(np.sum(np.abs(np.diff(close))))
+        distinct = int(np.unique(np.round(close, 10)).size)
+        return {
+            "unit": unit,
+            "source": "bars",
+            "displacement_per_min": round(scale(disp) / minutes, 4),
+            "path_per_min": round(scale(path) / minutes, 4),
+            "velocity_per_min": round(distinct / minutes, 4),
+            "span_min": round(minutes, 2),
+            "samples": int(n),
+            "note": "one-second closes: the law window at bar resolution",
+        }
+
+    def snapshot(self) -> dict:
+        """The honest macro block (beside the tick block, never instead)."""
+        n = len(self)
+        out = {"bars": int(n), "ticks_folded": int(self._folded)}
+        if n >= 1:
+            out["span_s"] = round(float(self.span_s() or 0.0), 1)
+        return out
+
+
 class LatencyMeter:
     """A bounded reservoir of (local_clock - exchange_clock) milliseconds.
 
@@ -435,6 +572,7 @@ class HyperFeedConfig:
     fx_pairs: tuple[str, ...] = tuple(FX_ON_KRAKEN)
     crypto_symbols: tuple[str, ...] = tuple(CRYPTO_ON_BINANCE)
     buffer_capacity: int = 4096
+    bar_capacity: int = 4096   # R105: 68 min of one-second bars at ANY rate
     snapshot_path: str = "hyperfeed.json"
     snapshot_every_s: float = 20.0
     connect_timeout_s: float = 15.0
@@ -454,10 +592,13 @@ class HyperFeed:
         self.config = config or HyperFeedConfig()
         self.started_ms = time.time() * 1000.0
         self.buffers: dict[str, TickBuffer] = {}
+        self.bars: dict[str, BarBuffer] = {}   # R105 -- the macro ring
         for sym in self.config.fx_pairs:
             self.buffers[sym] = TickBuffer(self.config.buffer_capacity)
+            self.bars[sym] = BarBuffer(self.config.bar_capacity)
         for sym in self.config.crypto_symbols:
             self.buffers.setdefault(sym, TickBuffer(self.config.buffer_capacity))
+            self.bars.setdefault(sym, BarBuffer(self.config.bar_capacity))
         self.venues: dict[str, VenueHealth] = {
             "kraken": VenueHealth("kraken"), "binance": VenueHealth("binance")}
 
@@ -476,12 +617,17 @@ class HyperFeed:
         if ring is None:
             return False
         health = self.venues.get(venue)
+        bars = self.bars.get(symbol)
         if bid is not None and ask is not None:
             stamp = float(ts_ms if ts_ms is not None else now_ms)
             ring.append(stamp, float(bid), float(ask))
+            if bars is not None:
+                bars.fold(stamp, (float(bid) + float(ask)) / 2.0)
         elif price is not None:
             stamp = float(ts_ms if ts_ms is not None else now_ms)
             ring.append(stamp, float(price), float(price))
+            if bars is not None:
+                bars.fold(stamp, float(price))
         else:
             return False
         if health is not None:
@@ -492,12 +638,28 @@ class HyperFeed:
 
     # -- the reductions -----------------------------------------------------
     def symbol_block(self, symbol: str, *, now_ms: float) -> dict:
+        """One symbol's honest block: the tick eye first, the bar eye behind it.
+
+        R105 -- THE LAW WINDOW AT ANY RATE: when the tick ring cannot reach
+        MOTION_MIN_SPAN_S (a hyper-fast symbol fills it in seconds), the bar
+        ring answers for the same window at one-second resolution, and the
+        motion dict says which eye spoke (``source``). Neither eye fabricates:
+        a young wire still reports ``None``, honestly.
+        """
         ring = self.buffers[symbol]
+        bars = self.bars.get(symbol)
         unit, denom = motion_unit(symbol)
         block = ring.snapshot(now_ms=now_ms)
         block["unit"] = unit
         if "ts_ms" in block:
-            block["motion"] = ring.motion(unit=unit, denom=denom)
+            motion = ring.motion(unit=unit, denom=denom)
+            if motion is not None:
+                motion.setdefault("source", "ticks")
+            elif bars is not None:
+                motion = bars.motion(unit=unit, denom=denom)
+            block["motion"] = motion
+            if bars is not None:
+                block["bars"] = bars.snapshot()
         return block
 
     def snapshot(self, *, now_ms: float | None = None) -> dict:
@@ -522,9 +684,11 @@ class HyperFeed:
                 "symbols_seen": len(seen),
                 "symbols_moving": len(moving),
                 "ticks_written": sum(b.written for b in self.buffers.values()),
+                "bars_written": sum(len(b) for b in self.bars.values()),
             },
             "reading": (f"live wire: {len(seen)}/{len(self.buffers)} symbols seen, "
-                        f"{len(moving)} with measured motion"),
+                        f"{len(moving)} with measured motion "
+                        f"(tick eye first, bar eye at any rate)"),
         }
 
 

@@ -44,6 +44,70 @@ ROOT = Path(__file__).resolve().parents[2]
 # importable here for the wheel's own tests.)
 
 
+def _derived_seed(base_seed: int, ledger_path: str) -> int:
+    """The wheel's own arithmetic, mirrored BEFORE the run (R108).
+
+    ``run_factory`` derives ``shift_seed = (base + 7919 * (n + 1)) % 2^30``
+    from the ledger's line count; the witness guard must derive the SAME
+    number to recognise a turn that already happened. The formula lives in
+    one spirit, two places -- a comment here binds them (the day they
+    disagree, the test that feeds both the same ledger will catch it).
+    """
+    try:
+        p = Path(ledger_path)
+        n = sum(1 for _ in p.open()) if p.exists() else 0
+    except OSError:
+        n = 0
+    return (int(base_seed) + 7919 * (n + 1)) % (1 << 30)
+
+
+def _wheel_already_turned(ledger_path: str, *, island: str, seed: int,
+                          date: str) -> tuple[bool, str]:
+    """R108 -- THE WITNESS, NOT A RIVAL: has this exact turn already run?
+
+    The wound this guard closes (2026-10-20, 17:16 UTC): a CI push and the
+    heart's timer both derived the same wheel position (same line count ->
+    same island, same seed) and ran the SAME 8-minute turn twice, writing
+    two identical-seed rows the guardian then had to declare. Same island +
+    same seed + same date in the ledger's LAST line means the wheel has
+    already turned TODAY -- a re-run would be deterministic déjà vu, not
+    new evidence. The honest answer is to WITNESS (exit clean, speak the
+    reason), never to burn the machine on a copy of itself.
+
+    Only the LAST line is consulted: an older duplicate is history the
+    append-only ledger keeps forever, never rewrites.
+    """
+    try:
+        p = Path(ledger_path)
+        if not p.exists():
+            return False, ""
+        with p.open("rb") as fh:
+            fh.seek(0, 2)
+            end = fh.tell()
+            window = bytearray()
+            step = 4096
+            while end > 0 and window.count(b"\n") < 3:
+                start = max(0, end - step)
+                fh.seek(start)
+                window = bytearray(fh.read(end - start)) + window
+                end = start
+            lines = [ln for ln in window.decode("utf-8", "replace").splitlines()
+                     if ln.strip()]
+            if not lines:
+                return False, ""
+            last = json.loads(lines[-1])
+        note = str(last.get("note") or "")
+        if (str(last.get("machine") or "") == str(island)
+                and str(last.get("date") or "") == str(date)
+                and f"seed={seed}" in note):
+            return True, (f"the wheel already turned today: island={island} "
+                          f"seed={seed} date={date} (ledger line: "
+                          f"{note[:120]})")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False, ""
+    return False, ""
+
+
 def _resolve_island(spec: str, ledger_path: str) -> str:
     """Resolve the shift's island: 'auto' rides the wheel, a name is the law.
 
@@ -192,13 +256,37 @@ def main(argv=None) -> int:
                     help="R100: the most recent rows every pantry champion is "
                          "re-measured on before the pantry remembers it "
                          "(0 = no probation this shift)")
+    ap.add_argument("--force-turn", dest="force_turn", action="store_true",
+                    default=False,
+                    help="R108: run even when the wheel already turned this "
+                         "island+seed today (manual interventions only; the "
+                         "honest default is to witness, not to rival)")
     args = ap.parse_args(argv)
 
     pairs = [p.strip() for p in args.pairs.split(",") if p.strip()]
-    universe = _load_universe(args.data, pairs, args.rows)
-    if not universe:
-        print("no data — nothing to run", file=sys.stderr)
-        return 1
+
+    # R98 — the island wheel: 'auto' becomes a real island before anything else.
+    island = _resolve_island(args.island, args.ledger)
+
+    # R108 -- THE WITNESS GUARD: before the machine burns a single second on
+    # data it will re-derive identically, ask the ledger whether THIS turn
+    # (island + derived seed + today) already ran. The CI push that lands
+    # minutes after the heart's beat used to re-run the same 8-minute turn
+    # and write a duplicate-seed row; now it WITNESSES -- clean exit, spoken
+    # reason, zero new evidence pretended. --force-turn escapes (a manual
+    # intervention is the operator's word, and the operator's word is law).
+    if not args.force_turn:
+        _witness_seed = _derived_seed(args.seed, args.ledger)
+        _today = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+        _turned, _reason = _wheel_already_turned(
+            args.ledger, island=island, seed=_witness_seed, date=_today)
+        if _turned:
+            print(json.dumps({
+                "skipped": True, "law": "R108 -- the witness, not a rival",
+                "machine": island, "seed": _witness_seed,
+                "date": _today, "reason": _reason,
+            }, indent=2, default=str))
+            return 0
 
     # R100 — THE RECENCY PROBATION'S WINDOW: the most recent rows, loaded with
     # the same honest reader (the tail of the same tapes -- the closest thing
@@ -210,8 +298,10 @@ def main(argv=None) -> int:
         if not probation_universe:
             probation_universe = None  # an absent window is unmeasured, never guessed
 
-    # R98 — the island wheel: 'auto' becomes a real island before anything else.
-    island = _resolve_island(args.island, args.ledger)
+    universe = _load_universe(args.data, pairs, args.rows)
+    if not universe:
+        print("no data — nothing to run", file=sys.stderr)
+        return 1
 
     cfg_obj = FactoryConfig(
         pairs=tuple(sorted(universe)),

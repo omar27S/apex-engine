@@ -127,6 +127,17 @@ class FactoryConfig:
     # R104 — THE COGNITION INSTRUMENTS: slice agreement for every champion
     # and the calibration ledger grading the probation's own predictions.
     calibration: bool = True
+    # R106 — THE COUCH KING'S TERM LIMIT: a champion that couches on the recent
+    # window for ``couch_bench_streak`` consecutive shifts has earned a BENCH
+    # rest -- it is not injected (its slots go to fresh hunters), its genome is
+    # PRESERVED in the pantry's bench with re-trial rights (a cooldown that
+    # halves-free over shifts, doubling each failed re-trial, capped). The
+    # pantry keeps every label (R100: labels, never erasures); the door simply
+    # stops crowning a king that does not hunt in the reigning regime.
+    couch_bench_streak: int = 3
+    couch_cooldown_base: int = 4
+    couch_cooldown_cap: int = 24
+    bench_max: int = 12
 
     def signature(self) -> str:
         blob = json.dumps(
@@ -144,6 +155,10 @@ class FactoryConfig:
                 "qd_injection": self.qd_injection,
                 "qd_top": self.qd_top,
                 "calibration": self.calibration,
+                "couch_bench_streak": self.couch_bench_streak,
+                "couch_cooldown_base": self.couch_cooldown_base,
+                "couch_cooldown_cap": self.couch_cooldown_cap,
+                "bench_max": self.bench_max,
                 "regime_gating": self.regime_gating,
             },
             sort_keys=True, default=str,
@@ -183,13 +198,18 @@ def _rank_key(fit) -> tuple[float, float]:
     return (float(fit.wilson_lb), float(fit.net_r))
 
 
-def _recency_rank(entry: dict) -> tuple[int, float]:
-    """R100 -- the order a pantry champion re-enters generation 0 in.
+def _recency_rank(entry: dict) -> tuple[int, tuple[int, float], float]:
+    """R100+R107 -- the order a pantry champion re-enters generation 0 in.
 
     A champion CONFIRMED on the recent window (the closest thing to tomorrow)
     rides first; a probationer follows; an unjudged entry (an old pantry, a
     hand-made one) rides last, never refused -- the label is read from the
-    pantry, never assumed, and within each class the measured wilson leads.
+    pantry, never assumed. R107 -- WITHIN each class the INDEPENDENCE of the
+    evidence now orders the door: a body that wins on every deterministic
+    slice rides before an equal Wilson that rode one (Faculty 4: belief
+    follows evidence, and independence is part of the evidence); an
+    unmeasured agreement rides last within its class, honestly, and the
+    measured wilson breaks what agreement leaves tied.
     """
     verdict = str((entry.get("recency") or {}).get("verdict") or "")
     order = {"confirmed": 0, "probation": 1}.get(verdict, 2)
@@ -199,7 +219,82 @@ def _recency_rank(entry: dict) -> tuple[int, float]:
         wilson = 0.0
     if not wilson == wilson:  # NaN guard: an unmeasured score rides last
         wilson, order = 0.0, 2
-    return (order, -wilson)
+    sa = entry.get("slice_agreement")
+    try:
+        sa_val = float(sa)
+    except (TypeError, ValueError):
+        sa_val = float("nan")
+    if sa_val == sa_val:  # measured independence leads; unmeasured trails
+        sa_key = (0, -sa_val)
+    else:
+        sa_key = (1, 0.0)
+    return (order, sa_key, -wilson)
+
+
+def _couch_backoff(streak: int, config: "FactoryConfig") -> int:
+    """R106 -- the bench's cooldown: exponential in the streak, capped.
+
+    streak 3 -> base (4 shifts); each couch beyond the trigger doubles it
+    (8, 16, ...), the cap bounds the exile so a king is never forgotten
+    forever. The numbers are policy, not physics: they live in the config,
+    sealed by its signature.
+    """
+    trigger = max(1, int(config.couch_bench_streak))
+    n = max(0, int(streak) - trigger)
+    base = max(1, int(config.couch_cooldown_base))
+    return int(min(base * (2 ** n), max(base, int(config.couch_cooldown_cap))))
+
+
+def _evolve_bench(old_bench: list, champions: list,
+                  config: "FactoryConfig") -> list:
+    """R106 -- the bench's honest bookkeeping between shifts.
+
+    * an OLD bench king that is among tonight's champions won its re-trial
+      (or was re-crowned): it leaves the bench, a full citizen again;
+    * an old king still resting ticks its cooldown DOWN one shift;
+    * an old king whose re-trial ran (cooldown hit 0 last shift) and did NOT
+      make tonight's champions couches again: its streak grows and the
+      doubled cooldown is honest arithmetic on that streak;
+    * tonight's chronic couches (streak >= trigger) join the bench with
+      their genome preserved -- memory, never exile;
+    * the bench is capped (the deepest streaks ride; the rest are spoken in
+      the report's overflow count, never silently erased).
+    """
+    out: list[dict] = []
+    tonight = {str(c.get("signature") or "") for c in champions}
+    for b in (old_bench or []):
+        if not isinstance(b, dict):
+            continue
+        sig = str(b.get("signature") or "")
+        if sig and sig in tonight:
+            continue  # it hunted again: the bench closes its file
+        cd = int(b.get("cooldown") or 0)
+        if cd > 0:
+            out.append({**b, "cooldown": cd - 1})
+        else:
+            streak = int(b.get("couch_streak") or 0) + 1
+            out.append({**b, "couch_streak": streak,
+                        "cooldown": _couch_backoff(streak, config)})
+    for c in champions:
+        rec = c.get("recency") or {}
+        if str(rec.get("verdict") or "") != "couch":
+            continue
+        streak = int(rec.get("couch_streak") or 0)
+        if streak < max(1, int(config.couch_bench_streak)):
+            continue
+        sig = str(c.get("signature") or "")
+        if any(str(x.get("signature") or "") == sig for x in out):
+            continue
+        try:
+            genome = StrategyGenome.from_dict(c).to_dict()
+        except Exception:
+            continue  # a body that cannot be read cannot be remembered
+        out.append({"genome": genome, "family": c.get("family"),
+                    "signature": sig, "wilson_lb": c.get("wilson_lb"),
+                    "net_r": c.get("net_r"), "couch_streak": streak,
+                    "cooldown": _couch_backoff(streak, config)})
+    out.sort(key=lambda b: -int(b.get("couch_streak") or 0))
+    return out[:max(0, int(config.bench_max))]
 
 
 def _make_staircase(pairs, screen_pair, evaluator: _Evaluator):
@@ -400,6 +495,13 @@ def run_factory(universe, config: FactoryConfig, *,
     # missing/corrupt file simply means a fresh random start, as before.
     champions_refused = 0
     gated_own = 0
+    # R106 -- the bench's honest counters (spoken in every report)
+    couch_benched = 0
+    bench_retrials = 0
+    bench_waiting = 0
+    couch_gated = 0
+    _couch_prior: dict[str, int] = {}
+    _bench_old: list = []
     # DEBT-060 -- THE WATCHTOWER'S WORD AT THE INJECTION DOOR TOO: a family the
     # state has PAUSED loses its slots, and the pantry's memory may not reopen
     # a closed door -- not this island's own champions (R91), not a foreigner's
@@ -415,6 +517,9 @@ def run_factory(universe, config: FactoryConfig, *,
         _cf = Path(f"factory_champions_{config.island}.json")
         _mig = json.loads(_cf.read_text()) if _cf.exists() else {}
         _pool = (_mig.get("migrants") or _mig.get("champions") or [])
+        _bench_old = _mig.get("bench") or []
+        if not isinstance(_bench_old, list):
+            _bench_old = []
         # THE DIRECTOR'S DNA (Law 3) -- the honest injection: a champion must
         # CARRY A MEASURE to re-enter generation 0. A measured 0.0 is honest
         # (re-scored, under the rank floor); an absent/NaN score is a ghost --
@@ -430,9 +535,57 @@ def run_factory(universe, config: FactoryConfig, *,
         # R100 -- THE RECENCY PROBATION'S ORDER: a champion confirmed on the
         # recent window re-enters FIRST (the label is read, never assumed; an
         # unjudged pantry ranks by measure alone, honest and backward-safe).
+        # R107 -- within each class the INDEPENDENCE of the evidence orders
+        # the door (slice agreement before Wilson; unmeasured trails).
         _pool.sort(key=_recency_rank)
+        # R106 -- THE COUCH KING'S TERM LIMIT: a chronic couch (a king that
+        # has couches on the recent window for `couch_bench_streak`
+        # consecutive shifts) sits this shift OUT -- its slot goes to a fresh
+        # hunter. The pantry's bench keeps its genome and its streak; a
+        # benched king earns a re-trial when its cooldown expires (below).
+        # Honest counters, never silent drops.
+        _couch_prior: dict[str, int] = {}
+        _hunters = []
+        for m in _pool:
+            _rec = m.get("recency") or {}
+            _sig = str(m.get("signature") or "")
+            _streak = int(_rec.get("couch_streak") or 0)
+            if _sig:
+                _couch_prior[_sig] = _streak
+            if (str(_rec.get("verdict") or "") == "couch"
+                    and _streak >= max(1, int(config.couch_bench_streak))):
+                couch_benched += 1
+                continue
+            _hunters.append(m)
+        _pool = _hunters
         champions_in = [StrategyGenome.from_dict(m["genome"])
                         for m in _pool if m.get("genome")]
+        # R106 -- THE RE-TRIAL DOOR: a benched king whose cooldown has
+        # expired re-enters generation 0 for ONE shift -- if it hunts again
+        # it is a full citizen (streak reset); if it couches again it is
+        # re-benched with a doubled cooldown. The bench is memory, not
+        # exile (the pantry never erases; the door only rests). The bench
+        # faces the SAME Law 3 as the pantry: a ghost (no genome, no
+        # measured score) never rides a re-trial -- refused and counted.
+        _bench_valid, _bench_refused = dna_mod.honest_champions(_bench_old)
+        couch_gated += _bench_refused
+        for _b in _bench_valid:
+            if bench_retrials >= max(0, int(config.bench_max)):
+                break
+            if not _b.get("genome"):
+                continue
+            if int(_b.get("cooldown") or 0) > 0:
+                bench_waiting += 1
+                continue
+            if _gated_out(_b):
+                couch_gated += 1
+                continue
+            _bg = StrategyGenome.from_dict(_b["genome"])
+            _bsig = str(_b.get("signature") or "")
+            if _bsig:
+                _couch_prior[_bsig] = int(_b.get("couch_streak") or 0)
+            champions_in.append(_bg)
+            bench_retrials += 1
     except (OSError, ValueError, TypeError, KeyError):
         champions_in = []
     champions_injected = 0
@@ -447,6 +600,7 @@ def run_factory(universe, config: FactoryConfig, *,
     diaspora_injected = 0
     diaspora_refused = 0
     diaspora_gated = 0
+    diaspora_couch_refused = 0
     diaspora_sources: dict[str, int] = {}
     try:
         _foreign_cap = max(0, config.population // 8)
@@ -461,6 +615,17 @@ def run_factory(universe, config: FactoryConfig, *,
             _fp, _ref = dna_mod.honest_champions(
                 _pm.get("migrants") or _pm.get("champions") or [])
             diaspora_refused += _ref
+            # R106 -- THE DIASPORA DOES NOT SPREAD COUCHES: a foreign body whose
+            # own pantry labels it a couch on ITS recent window is refused at
+            # THIS door too (counted, never hidden) -- the diaspora carries
+            # hunters, not reputations earned in a regime that has passed.
+            _kept = []
+            for m in _fp:
+                if str((m.get("recency") or {}).get("verdict") or "") == "couch":
+                    diaspora_couch_refused += 1
+                    continue
+                _kept.append(m)
+            _fp = _kept
             _fp.sort(key=_recency_rank)
             for m in _fp:
                 if diaspora_injected >= _foreign_cap:
@@ -710,9 +875,18 @@ def run_factory(universe, config: FactoryConfig, *,
                     _verdict = "probation"
                 else:
                     _verdict = "couch"  # measured: no life in the window
+                # R106 -- THE STREAK IS MEMORY: a couch tonight rides the
+                # pantry's prior streak (its own label of last shift, or a
+                # bench re-trial's); a hunter resets it to zero. The streak
+                # is the bench's trigger, and it is honest arithmetic on
+                # measured labels, never a guess.
+                _psig = str(_ch.get("signature") or "")
+                _streak = (int(_couch_prior.get(_psig, 0)) + 1
+                           if _verdict == "couch" else 0)
                 _ch["recency"] = {"wilson_lb": round(_wilson, 4),
                                    "net_r": round(float(_fit.net_r), 4),
-                                   "trades": _trades, "verdict": _verdict}
+                                   "trades": _trades, "verdict": _verdict,
+                                   "couch_streak": _streak}
             except Exception:  # a failed re-read is unmeasured, never a guess
                 _verdict = "unmeasured"
                 _ch["recency"] = {"verdict": _verdict}
@@ -846,17 +1020,27 @@ def run_factory(universe, config: FactoryConfig, *,
             cma_rows.append(_cma_refine(g, evaluator, cheap_pairs, config))
 
     # R68 — export this island's champions as a migration (empty => no export,
-    # reported honestly rather than fabricated).
-    if champions:
+    # reported honestly rather than fabricated). R106 -- THE EXPORT CARRIES
+    # HUNTERS ONLY: a champion the probation labels a couch on the recent
+    # window does not ride to the other islands (their door refuses it too,
+    # belt over braces); the honest reason is spoken when nobody rides.
+    _pantry_rows = [{"genome": StrategyGenome.from_dict(r).to_dict(),
+                     "family": r["family"], "wilson_lb": r["wilson_lb"],
+                     "net_r": r["net_r"],
+                     "slice_agreement": r.get("slice_agreement"),
+                     "recency": r.get("recency")}
+                    for r in champions]
+    _hunters = [row for row in _pantry_rows
+                if str(((row.get("recency") or {}).get("verdict"))
+                       or "") != "couch"]
+    if _hunters:
         migration = islands_mod.build_migration(
-            config.island, config.generations,
-            [{"genome": StrategyGenome.from_dict(r).to_dict(),
-              "family": r["family"], "wilson_lb": r["wilson_lb"],
-              "net_r": r["net_r"],
-              "slice_agreement": r.get("slice_agreement"),
-              "recency": r.get("recency")}
-             for r in champions],
-        ).to_dict()
+            config.island, config.generations, _hunters).to_dict()
+    elif champions:
+        migration = {"exported": False,
+                     "reason": "every champion is a couch on the recent "
+                               "window -- the diaspora does not spread "
+                               "couches (R106)"}
     else:
         migration = {"exported": False,
                      "reason": "no ranked body cleared the floor this shift "
@@ -874,12 +1058,32 @@ def run_factory(universe, config: FactoryConfig, *,
 
     # R91 -- persist this shift's champions for the NEXT shift's generation 0
     # (the evolution's memory; committed like the ledger it grows beside).
-    if champions:
+    # R106 -- THE BENCH RIDES THE PANTRY FILE: the pantry keeps ALL of
+    # tonight's champions (the island's own memory, labels and all) PLUS the
+    # bench (benched kings with their streak and cooldown -- memory, never
+    # exile). The digest seals the champions exactly as before (a reader
+    # that never knew the bench is never surprised).
+    if champions or _bench_old:
+        _bench_final: list = []
         try:
+            _bench_final = _evolve_bench(_bench_old, champions, config)
+            _pantry = {
+                "schema": islands_mod.MIGRATION_SCHEMA,
+                "source_island": config.island,
+                "generation": int(config.generations),
+                "champions": _pantry_rows,
+                "digest": islands_mod._digest(
+                    config.island, int(config.generations), _pantry_rows),
+                "bench": _bench_final,
+                "exported": {"hunters": len(_hunters),
+                             "couches": len(_pantry_rows) - len(_hunters)},
+            }
             Path(f"factory_champions_{config.island}.json").write_text(
-                json.dumps(migration, indent=2, default=str))
+                json.dumps(_pantry, indent=2, default=str))
         except (OSError, TypeError, ValueError):
             pass
+    else:
+        _bench_final = []
 
     wall = clock() - start
     # Honest machine-work: EVERY evaluation performed (polish + screen + full +
@@ -896,10 +1100,24 @@ def run_factory(universe, config: FactoryConfig, *,
                      "sources": diaspora_sources,
                      "refused": diaspora_refused,
                      "gated": diaspora_gated + gated_own,
+                     "couch_refused": diaspora_couch_refused,
                      "policy": "cross-island best-first, cap population//8 "
                                "(R99: three tribes, one gene pool); the "
-                               "Watchtower's paused families never re-enter"},
+                               "Watchtower's paused families never re-enter; "
+                               "a couch never rides (R106)"},
         "probation": probation_block,
+        "couch_law": {"benched_own": couch_benched,
+                      "bench_retrials": bench_retrials,
+                      "bench_waiting": bench_waiting,
+                      "bench_gated": couch_gated,
+                      "bench_size": len(_bench_final),
+                      "diaspora_couch_refused": diaspora_couch_refused,
+                      "exported_hunters": len(_hunters),
+                      "exported_couches": len(_pantry_rows) - len(_hunters),
+                      "policy": "a chronic couch (streak >= trigger) rests on "
+                                "the bench with re-trial rights; the pantry "
+                                "never erases; the diaspora spreads hunters "
+                                "only (R106)"},
         "dna": dna_mod.transcribe(champions_refused=champions_refused),
         "zcognition": zcog_mod.zcognition_block(
             qd_coverage=qd_block.get("coverage"),

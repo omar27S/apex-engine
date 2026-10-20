@@ -292,11 +292,40 @@ def _check_disk_floor(backend: Path, ctx: dict) -> tuple[bool, str]:
 
 
 def _check_heart_scheduled(backend: Path, ctx: dict) -> tuple[bool, str]:
-    rc, out = ctx["runner"](["systemctl", "is-enabled", "apex-heart.timer"])
+    """R109 -- THE ORGANS' CLOCKS, ALL OF THEM (not the heart alone).
+
+    The 2026-10-20 lesson: a reconnaissance that looked only where it
+    expected life (``systemctl --user`` while the organs live at SYSTEM
+    level) nearly declared a healthy organism comatose. The inverse wound is
+    worse: an organ's timer disabled or lost while its siblings beat on --
+    the body lives, one sense dies silently. So the guardian asks EVERY
+    organ's clock, one by one, and speaks each answer by name: the heart
+    (the evolution's turns), the grand (the night's whole civilization), the
+    guardian itself (the watcher watches the watcher), the falcon (the slow
+    eye) -- and the live wire's service (the fast eye, always-on, not a
+    timer). A missing unit file ('not-found') is the gravest answer: a
+    clock that no longer exists cannot be re-enabled by hope.
+    """
+    runner = ctx["runner"]
+    verdicts: list[str] = []
+    wounded: list[str] = []
+    for unit in ("apex-heart.timer", "apex-grand.timer",
+                 "apex-guardian.timer", "apex-falcon.timer"):
+        rc, out = runner(["systemctl", "is-enabled", unit])
+        state = out.strip().lower()
+        if rc == 0 and state == "enabled":
+            verdicts.append(f"{unit}: enabled")
+        else:
+            wounded.append(f"{unit} answers '{state or 'silence'}'")
+    rc, out = runner(["systemctl", "is-active", "apex-hyperfeed.service"])
     state = out.strip().lower()
-    if rc == 0 and state == "enabled":
-        return True, "the heart's timer is enabled"
-    return False, f"apex-heart.timer answers '{state or 'silence'}'"
+    if rc == 0 and state == "active":
+        verdicts.append("apex-hyperfeed.service: active")
+    else:
+        wounded.append(f"apex-hyperfeed.service answers '{state or 'silence'}'")
+    if wounded:
+        return False, "; ".join(wounded)
+    return True, "all five organs' clocks answer: " + ", ".join(verdicts)
 
 
 def _check_letter_of_dawn(backend: Path, ctx: dict) -> tuple[bool, str]:

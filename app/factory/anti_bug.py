@@ -310,7 +310,8 @@ def _check_heart_scheduled(backend: Path, ctx: dict) -> tuple[bool, str]:
     verdicts: list[str] = []
     wounded: list[str] = []
     for unit in ("apex-heart.timer", "apex-grand.timer",
-                 "apex-guardian.timer", "apex-falcon.timer"):
+                 "apex-guardian.timer", "apex-falcon.timer",
+                 "apex-mouth.timer"):
         rc, out = runner(["systemctl", "is-enabled", unit])
         state = out.strip().lower()
         if rc == 0 and state == "enabled":
@@ -325,7 +326,7 @@ def _check_heart_scheduled(backend: Path, ctx: dict) -> tuple[bool, str]:
         wounded.append(f"apex-hyperfeed.service answers '{state or 'silence'}'")
     if wounded:
         return False, "; ".join(wounded)
-    return True, "all five organs' clocks answer: " + ", ".join(verdicts)
+    return True, "all six organs' clocks answer: " + ", ".join(verdicts)
 
 
 def _check_letter_of_dawn(backend: Path, ctx: dict) -> tuple[bool, str]:
@@ -400,6 +401,51 @@ def _check_hyperfeed_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
     return True, f"the live wire is fresh ({int(age)} s since its snapshot)"
 
 
+MOUTH_FILE = "signal_live.json"
+# R113's organ was born 2026-10-20 (the mouth's first live words, 23:04 UTC).
+MOUTH_BIRTH = _dt.date(2026, 10, 20)
+# The mouth speaks every 15 minutes; three missed turns (45 min) is silence.
+MOUTH_MAX_AGE_S = 45 * 60
+
+
+def _check_mouth_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """R113's clock: did the mouth speak recently?
+
+    The mouth writes ``signal_live.json`` EVERY turn -- speaking or honestly
+    blind, the artifact is the organ's heartbeat (a blind turn still says
+    "la bocca tace" with a fresh stamp). The guardian reads the artifact's
+    OWN ``ts`` first (an ISO stamp, not epoch -- the mouth speaks ISO like
+    every CLI organ) and falls back to the mtime. Quiet longer than three
+    turns means the timer died or the organ hangs: a WARN, said aloud (the
+    signal cadence the Boss ordered is the body's newest sense -- its death
+    must never be silent). Birth-day softness like the wire's: an unborn
+    sensor is emptiness, not a lie.
+    """
+    path = backend / MOUTH_FILE
+    if not path.exists():
+        if ctx["now"].date() <= MOUTH_BIRTH:
+            return True, "SOFT: the mouth is not installed yet (birth day)"
+        return False, "signal_live.json is absent -- the mouth never spoke"
+    age = None
+    try:
+        data = json.loads(path.read_text())
+        ts = (data or {}).get("ts")
+        if isinstance(ts, str) and ts:
+            stamp = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            age = ctx["now"].timestamp() - stamp.timestamp()
+    except (OSError, ValueError, TypeError):
+        pass
+    if age is None:
+        try:
+            age = ctx["now"].timestamp() - path.stat().st_mtime
+        except OSError:
+            return False, "signal_live.json cannot be read or stat-ed"
+    if age > MOUTH_MAX_AGE_S:
+        return False, (f"the mouth went quiet {int(age / 60)} min ago "
+                       f"(> {MOUTH_MAX_AGE_S // 60} min) -- no live signal turns")
+    return True, f"the mouth spoke recently ({int(age)} s since its turn)"
+
+
 CHECKS: tuple[tuple[str, str, object], ...] = (
     ("ledger_sealed", "fail", _check_ledger_sealed),
     ("ledger_alive", "warn", _check_ledger_alive),
@@ -413,6 +459,7 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("letter_of_dawn", "warn", _check_letter_of_dawn),
     ("dd_ledger_grown", "warn", _check_dd_ledger_grown),
     ("hyperfeed_alive", "warn", _check_hyperfeed_alive),
+    ("mouth_alive", "warn", _check_mouth_alive),
 )
 
 

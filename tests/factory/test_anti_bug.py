@@ -112,6 +112,11 @@ def _healthy_ward(tmp_path: Path, *, now: dt.datetime,
     (backend / "hyperfeed.json").write_text(json.dumps(
         {"schema": 1, "kind": "hyperfeed", "ts": _stamp,
          "venues": {}, "symbols": {}, "counts": {}}))
+    # THE MOUTH (check 14, born 2026-10-20): a healthy ward carries the
+    # organ's fresh artifact -- the mouth writes it EVERY turn, speaking or
+    # honestly blind, and the guardian reads its own ISO stamp.
+    (backend / "signal_live.json").write_text(json.dumps(
+        {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ")}))
     # a real repo so git answers like on the VM
     subprocess.run(["git", "init", "-q"], cwd=backend, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=backend,
@@ -313,6 +318,36 @@ def test_a_disabled_heart_timer_is_watched():
     report = ab.sweep(backend, now=now,
                       runner=Machine(timer="mask"), write=False)
     assert "heart_scheduled" in report["warned"]
+
+
+def test_the_mouth_that_went_silent_is_watched():
+    # R113's clock: an artifact older than three turns (45 min) is silence
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    stale = now - dt.timedelta(minutes=90)
+    (backend / "signal_live.json").write_text(json.dumps(
+        {"ts": stale.strftime("%Y-%m-%dT%H:%M:%SZ")}))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "mouth_alive" in report["warned"]
+    assert "mouth_alive" not in report["failed"]   # a warn, said aloud
+
+
+def test_the_unborn_mouth_is_graced_on_its_birth_day():
+    now = dt.datetime(2026, 10, 20, 23, 30, tzinfo=dt.timezone.utc)
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "signal_live.json").unlink()
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "mouth_alive")
+    assert check["ok"] is True          # SOFT: an unborn sensor is emptiness
+
+
+def test_the_mouth_six_clocks_all_answer():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "heart_scheduled")
+    assert check["ok"] is True
+    assert "six organs" in check["detail"]   # the mouth joined the roll
 
 
 # ---------------------------------------------------------------------------

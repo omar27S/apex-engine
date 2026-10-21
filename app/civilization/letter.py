@@ -524,6 +524,43 @@ def _voice(report: dict, st: dict, table: dict, *, civilization, thermometer,
                      f"in numeri, e i numeri si giudicano.")
     except Exception:
         pass
+    # R126 -- IL SANGUE: il genealogista parla al CEO. Tre sedi, il verdetto
+    # del sangue, il freno detto ad alta voce. La legge della lettera vale
+    # anche qui: un organo assente e' silenzio, mai una bugia.
+    try:
+        _isles = []
+        for _isle in ("heart", "turbo", "vault"):
+            try:
+                _g = json.loads(
+                    Path(f"factory_genealogy_{_isle}.json").read_text())
+                _isles.append((_isle, _g))
+            except Exception:
+                continue
+        if _isles:
+            L.append("**Il sangue (da dove vengono i corpi).**")
+            _it = {"diverse": "diversificato",
+                   "concentrating": "in concentrazione",
+                   "one-blood": "una sola famiglia"}
+            for _isle, _g in _isles:
+                _line = (f"  {_isle}: {_it.get(_g.get('verdict'), _g.get('verdict'))} "
+                         f"({_g.get('founders_alive')} linee vive su "
+                         f"{_g.get('bodies')} corpi, Ne={_g.get('effective_population')}, "
+                         f"incesti {_g.get('sibling_matings')}/{_g.get('crossovers')})")
+                _brk = _g.get("brake") or {}
+                if _brk.get("applied"):
+                    _line += (f" -- il freno e' scattato: "
+                              f"{_brk.get('sibling_mates_avoided', 0)} accoppiamenti "
+                              f"tra fratelli evitati"
+                              + (f", {_brk.get('immigrants')} immigrati freschi"
+                                 if _brk.get("immigrants") else "")
+                              + "")
+                L.append(_line + ".")
+            L.append("  Il genealogista scrive il libro del sangue: chi ha "
+                     "generato chi, e di quale fondatore e' figlio ogni corpo. "
+                     "Una popolazione che dimentica i propri padri non e' "
+                     "un'evoluzione, e' una famiglia che si specchia.")
+    except Exception:
+        pass
     L.append("")
 
     return L

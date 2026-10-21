@@ -65,6 +65,7 @@ from app.factory import result_memory as rm_mod
 from app.factory import slices as slices_mod
 from app.factory import staircase as staircase_mod
 from app.factory import zcognition as zcog_mod
+from app.factory import genealogist as gene_mod
 
 __all__ = ["FactoryConfig", "run_factory"]
 
@@ -554,6 +555,26 @@ def run_factory(universe, config: FactoryConfig, *,
 
     # --- generation 0: random + Lamarckian polish (R71c) -------------------
     population: list[StrategyGenome] = []
+    # R126 -- THE GENEALOGIST'S BLOOD BOOK: the island's persistent memory of
+    # parentage.  Every entry into generation 0 (pantry, bench, diaspora,
+    # atlas, random) is SIGHTED in the book: a known signature carries its
+    # blood forward, a first sighting is a founder (ancestry is never
+    # invented for the past).  The book is pruned on save to the living --
+    # memory, not a cemetery.  Fail-open: a torn book is a fresh start.
+    _blood_path = Path(f"factory_blood_{config.island}.json")
+    _book = gene_mod.BloodBook.load(_blood_path, island=config.island)
+    _births: list[gene_mod.Birth] = []
+    _brake = {"applied": False, "sibling_mates_avoided": 0,
+              "immigrants": 0, "reason": "il sangue era diversificato"}
+
+    def _sight(g, op: str = "seed", parents: tuple = ()) -> None:
+        sig = str(g.signature())
+        if not _book.is_known(sig):
+            if parents:
+                _book.record_child(sig, parents)
+            else:
+                _book.record_founder(sig)
+        _births.append(gene_mod.Birth(child=sig, op=op, parents=parents))
     # R91 -- THE PERSISTENT CHAMPIONS: this island's previous champions re-enter
     # generation 0 (re-evaluated on TONIGHT's slices -- the result memory makes
     # their re-scoring nearly free). Evolution ACCUMULATES instead of restarting
@@ -626,6 +647,8 @@ def run_factory(universe, config: FactoryConfig, *,
         _pool = _hunters
         champions_in = [StrategyGenome.from_dict(m["genome"])
                         for m in _pool if m.get("genome")]
+        for _cg in champions_in:
+            _sight(_cg, op="pantry")
         # R106 -- THE RE-TRIAL DOOR: a benched king whose cooldown has
         # expired re-enters generation 0 for ONE shift -- if it hunts again
         # it is a full citizen (streak reset); if it couches again it is
@@ -651,6 +674,7 @@ def run_factory(universe, config: FactoryConfig, *,
             if _bsig:
                 _couch_prior[_bsig] = int(_b.get("couch_streak") or 0)
             champions_in.append(_bg)
+            _sight(_bg, op="bench")
             bench_retrials += 1
     except (OSError, ValueError, TypeError, KeyError):
         champions_in = []
@@ -705,6 +729,7 @@ def run_factory(universe, config: FactoryConfig, *,
                     continue  # no island doubles its population with a clone
                 _seen.add(_sig)
                 champions_in.append(_g)
+                _sight(_g, op="diaspora")
                 diaspora_injected += 1
                 diaspora_sources[_other] = diaspora_sources.get(_other, 0) + 1
     except (OSError, ValueError, TypeError, KeyError):
@@ -739,6 +764,7 @@ def run_factory(universe, config: FactoryConfig, *,
                     continue
                 champions_in.append(StrategyGenome.from_dict(_g_dict))
                 _seen_qd.add(_sig)
+                _sight(champions_in[-1], op="atlas")
                 qd_injected += 1
         except (OSError, ValueError, TypeError, KeyError):
             pass  # the atlas is a passenger, never a gate
@@ -756,6 +782,7 @@ def run_factory(universe, config: FactoryConfig, *,
             champions_injected += 1
             continue
         g = _new_genome()
+        _sight(g, op="random")
         if config.polish:
             def objective(cand):
                 # The polish is a CHEAP local search: the screen pair only.
@@ -858,15 +885,58 @@ def run_factory(universe, config: FactoryConfig, *,
 
         # --- breed the next generation (EDA-biased + adaptive rate) --------
         children: list[StrategyGenome] = list(elites)
-        n_child = max(0, config.population - len(elites))
+        for _eg in elites:
+            _sight(_eg, op="elite")
+        # R127 -- THE CONSANGUINEITY BRAKE: measure the elites' blood BEFORE
+        # breeding.  When it concentrates the crossover prefers DISJOINT
+        # mates (bounded tries, honest fall-through); under one-blood a few
+        # fresh immigrants ride the children (they REPLACE as many bred
+        # children -- the population never changes, the pairs never change,
+        # every sizing rule untouched: only the CHOICE OF MATES widens).
+        _elite_blood = {str(g.signature()): _book.blood_of(str(g.signature()))
+                        for g in elites}
+        _elite_h = gene_mod.herfindahl(gene_mod.census(_elite_blood))
+        _brake_on = _elite_h >= gene_mod.VERDICT_THRESHOLDS["concentrating"]
+        _immigrants_n = (gene_mod.BRAKE_IMMIGRANTS
+                         if _elite_h >= gene_mod.VERDICT_THRESHOLDS["one_blood"]
+                         else 0)
+        if _brake_on:
+            _brake["applied"] = True
+            _brake["reason"] = (
+                "il sangue degli elite si concentra (H="
+                f"{_elite_h:.3f}): i partner preferiti hanno sangue diverso")
+        if _immigrants_n:
+            _brake["immigrants"] = _immigrants_n
+            _brake["reason"] = (f"one-blood (H={_elite_h:.3f}): "
+                                f"{_immigrants_n} immigrati freschi entrano "
+                                "nella generazione")
+        n_child = max(0, config.population - len(elites) - _immigrants_n)
         for i in range(n_child):
             if i % 2 == 1 and len(elites) >= 2:
-                a, b = elites[int(rng.integers(len(elites)))], \
-                    elites[int(rng.integers(len(elites)))]
+                a = elites[int(rng.integers(len(elites)))]
+                if _brake_on:
+                    _asig = str(a.signature())
+                    _msig, _avd = gene_mod.choose_mate(
+                        [str(g.signature()) for g in elites], _asig, _book, rng)
+                    b = next(g for g in elites if str(g.signature()) == _msig)
+                    if _avd:
+                        _brake["sibling_mates_avoided"] += 1
+                else:
+                    b = elites[int(rng.integers(len(elites)))]
                 child = breeding.crossover_genome(a, b, rng)
+                _book.record_child(str(child.signature()),
+                                   (str(a.signature()), str(b.signature())))
+                _births.append(gene_mod.Birth(
+                    child=str(child.signature()), op="crossover",
+                    parents=(str(a.signature()), str(b.signature()))))
             else:
                 parent = elites[int(rng.integers(len(elites)))]
                 child = breeding.mutate_genome(parent, rng, rate=rate)
+                _book.record_child(str(child.signature()),
+                                   (str(parent.signature()),))
+                _births.append(gene_mod.Birth(
+                    child=str(child.signature()), op="mutate",
+                    parents=(str(parent.signature()),)))
             # R71a — draw a few genes from the survivors' distribution.
             genes = child.to_dict()
             moved = False
@@ -885,6 +955,20 @@ def run_factory(universe, config: FactoryConfig, *,
                 moved = True
                 directed_stats["nudged"] += d_n
             children.append(StrategyGenome.from_dict(genes) if moved else child)
+            _csig = str(children[-1].signature())
+            if not _book.is_known(_csig):
+                # an EDA/directed REBUILD is a new signature born of `child`
+                _book.record_child(_csig, (str(child.signature()),))
+                _births.append(gene_mod.Birth(
+                    child=_csig, op="rebuild",
+                    parents=(str(child.signature()),)))
+        # R127 -- the fresh immigrants ride BESIDE the bred children (they
+        # replaced their slots in n_child, so the pool stays exactly
+        # config.population).  A newborn immigrant is its own founder.
+        for _ in range(_immigrants_n):
+            _ig = _new_genome()
+            _sight(_ig, op="immigrant")
+            children.append(_ig)
         scored = _evaluate_pool(children)
 
     # --- R73 realms + R71b CMA-ES on the finalists -------------------------
@@ -1151,6 +1235,30 @@ def run_factory(universe, config: FactoryConfig, *,
     else:
         _bench_final = []
 
+    # R126 -- THE GENEALOGIST'S SPOKEN CENSUS: the final pool's blood (the
+    # last generation's living bodies -- the survivors of the funnel), the
+    # collision probability, the effective population, the verdict.  The
+    # book is pruned to the living (pool + champions + bench + atlas
+    # futures) and saved; the artifact rides beside the pantry (guardian
+    # check #16).  Fail-open: a book that cannot save never stops the shift.
+    _final_blood = {str(g.signature()): _book.blood_of(str(g.signature()))
+                    for g, _f in final_scored}
+    _gene_block = gene_mod.artifact(
+        island=config.island, blood_map=_final_blood, births=_births,
+        book=_book, brake=_brake)
+    try:
+        _alive = set(_final_blood)
+        _alive |= {str(StrategyGenome.from_dict(r["genome"]).signature())
+                   for r in _pantry_rows if r.get("genome")}
+        _alive |= {str(m.get("signature") or "") for m in _bench_old}
+        _book.prune_to({s for s in _alive if s})
+        if _publish:
+            _book.save(_blood_path)
+            Path(f"factory_genealogy_{config.island}.json").write_text(
+                json.dumps(_gene_block, indent=1, default=str))
+    except (OSError, ValueError, TypeError, KeyError):
+        pass  # the census was already spoken; the memory is a passenger
+
     wall = clock() - start
     # Honest machine-work: EVERY evaluation performed (polish + screen + full +
     # CMA), which is exactly the result memory's miss count. ``genomes_scored``
@@ -1186,6 +1294,7 @@ def run_factory(universe, config: FactoryConfig, *,
                                 "only (R106)"},
         "dna": dna_mod.transcribe(champions_refused=champions_refused),
         "weather": _live_weather(),   # R115: the sky it evolved under, observed
+        "genealogy": _gene_block,     # R126: the blood it carries, spoken
         "zcognition": zcog_mod.zcognition_block(
             qd_coverage=qd_block.get("coverage"),
             calibration=calibration_block.get("accuracy"),

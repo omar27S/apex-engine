@@ -405,6 +405,8 @@ def _check_hyperfeed_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
 MOUTH_FILE = "signal_live.json"
 # R113's organ was born 2026-10-20 (the mouth's first live words, 23:04 UTC).
 MOUTH_BIRTH = _dt.date(2026, 10, 20)
+GENEALOGY_BIRTH = _dt.date(2026, 10, 21)   # R126: the genealogist is born
+GENEALOGY_MAX_AGE_S = 12 * 3600            # four turns of the heart
 # The mouth speaks every 15 minutes; three missed turns (45 min) is silence.
 MOUTH_MAX_AGE_S = 45 * 60
 
@@ -554,6 +556,58 @@ def _check_scars_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
                   f"tripwire resolves ({stats['retired']} retired with honour)")
 
 
+def _check_genealogy_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """R126 -- THE GENEALOGIST'S PULSE: the blood book breathes, the census
+    speaks, and the brake fires when it must.
+
+    For every wheel island the census artifact (factory_genealogy_) and the
+    blood book (factory_blood_) must exist after the birth-day grace and be
+    younger than four turns.  A census that counts no bodies is a census
+    that forgot to count; a verdict of ``one-blood`` with a brake that
+    never fired is an ALARM -- the medicine exists and did not run (a
+    wiring wound, not a measurement).  The verdict itself is never a
+    failure: one-blood with the brake engaged is the organism healing,
+    and it is SPOKEN so the CEO hears it.
+    """
+    from app.factory.islands import ISLAND_WHEEL
+    if ctx["now"].date() <= GENEALOGY_BIRTH:
+        return True, "SOFT: the genealogist is being born (birth day)"
+    readings = []
+    for island in ISLAND_WHEEL:
+        art_p = backend / f"factory_genealogy_{island}.json"
+        book_p = backend / f"factory_blood_{island}.json"
+        if not art_p.exists() or not book_p.exists():
+            return False, (f"the genealogist is mute: {island} has no "
+                           "census or no blood book")
+        try:
+            art = json.loads(art_p.read_text())
+            json.loads(book_p.read_text())
+        except (OSError, ValueError):
+            return False, f"{island}'s genealogy artifact is torn"
+        ts = (art or {}).get("ts")
+        if not isinstance(ts, (int, float)):
+            return False, f"{island}'s census carries no timestamp"
+        age = ctx["now"].timestamp() - float(ts)
+        if age > GENEALOGY_MAX_AGE_S:
+            return False, (f"{island}'s census is {int(age / 3600)}h old "
+                           f"(> {GENEALOGY_MAX_AGE_S // 3600}h)")
+        bodies = (art or {}).get("bodies")
+        if not isinstance(bodies, int) or bodies <= 0:
+            return False, (f"{island}'s census counted no bodies -- the "
+                           "counter forgot")
+        verdict_v = str((art or {}).get("verdict") or "")
+        brake = (art or {}).get("brake") or {}
+        if verdict_v == "one-blood" and not brake.get("applied"):
+            return False, (f"{island} is one-blood and the consanguineity "
+                           "brake never fired -- the medicine did not run")
+        readings.append(
+            f"{island} {verdict_v} "
+            f"(H={art.get('herfindahl')}, Ne={art.get('effective_population')}, "
+            f"incesti {art.get('sibling_matings')}/{art.get('crossovers')}"
+            + (", freno acceso)" if brake.get("applied") else ")"))
+    return True, "il sangue: " + "; ".join(readings)
+
+
 CHECKS: tuple[tuple[str, str, object], ...] = (
     ("ledger_sealed", "fail", _check_ledger_sealed),
     ("ledger_alive", "warn", _check_ledger_alive),
@@ -570,6 +624,7 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("mouth_alive", "warn", _check_mouth_alive),
     ("history_edge", "warn", _check_history_edge),
     ("scars_alive", "warn", _check_scars_alive),
+    ("genealogy_alive", "warn", _check_genealogy_alive),
 )
 
 

@@ -137,6 +137,21 @@ def _healthy_ward(tmp_path: Path, *, now: dt.datetime,
         "pairs": {"EURUSD": {"edge_ts": int(now.timestamp()) - 3600,
                              "edge_age_s": 3600, "verdict": "fresh"}},
     }))
+    # THE GENEALOGIST (R126's organ, born 2026-10-21): the census and the
+    # blood book for every wheel island, fresh like every organ -- the
+    # guardian reads the organ's own word (never re-derived).
+    for _isle in ("heart", "turbo", "vault"):
+        (backend / f"factory_genealogy_{_isle}.json").write_text(json.dumps({
+            "schema": 1, "island": _isle, "ts": int(now.timestamp()),
+            "bodies": 240, "founders_alive": 40, "herfindahl": 0.031,
+            "effective_population": 32.25, "sibling_matings": 0,
+            "crossovers": 100, "verdict": "diverse",
+            "brake": {"applied": False},
+        }))
+        (backend / f"factory_blood_{_isle}.json").write_text(json.dumps({
+            "schema": 1, "island": _isle, "founders_seen": 40,
+            "entries": 0, "blood": {},
+        }))
     # a real repo so git answers like on the VM
     subprocess.run(["git", "init", "-q"], cwd=backend, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=backend,
@@ -613,6 +628,78 @@ def test_a_retired_scar_rests_with_honour():
     assert "scars_alive" not in report["warned"]
     msg = [c["detail"] for c in report["checks"] if c["name"] == "scars_alive"][0]
     assert "remembers 0 wounds" in msg and "1 retired with honour" in msg
+
+
+# ---------------------------------------------------------------------------
+# R126 -- THE GENEALOGIST (the blood book breathes, the census speaks)
+# ---------------------------------------------------------------------------
+def test_a_mute_genealogist_is_spoken_after_the_birth():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "factory_genealogy_heart.json").unlink()
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "genealogy_alive" in report["warned"]
+
+
+def test_a_torn_census_is_spoken():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "factory_genealogy_turbo.json").write_text("{torn json")
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "genealogy_alive" in report["warned"]
+
+
+def test_a_one_blood_census_without_the_brake_is_an_alarm():
+    """The measurement is honest... but the medicine never ran: a wiring
+    wound, not a verdict."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    _art = json.loads((backend / "factory_genealogy_heart.json").read_text())
+    _art["verdict"] = "one-blood"
+    _art["brake"] = {"applied": False}
+    (backend / "factory_genealogy_heart.json").write_text(json.dumps(_art))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "genealogy_alive" in report["warned"]
+    msg = [c["detail"] for c in report["checks"]
+           if c["name"] == "genealogy_alive"][0]
+    assert "brake never fired" in msg
+
+
+def test_a_one_blood_census_with_the_brake_engaged_is_healing_not_failure():
+    """One-blood WITH the brake is the organism healing -- spoken aloud,
+    never a failure (the verdict is a measurement, not a sin)."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    _art = json.loads((backend / "factory_genealogy_heart.json").read_text())
+    _art["verdict"] = "one-blood"
+    _art["brake"] = {"applied": True, "sibling_mates_avoided": 12,
+                     "immigrants": 4}
+    (backend / "factory_genealogy_heart.json").write_text(json.dumps(_art))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "genealogy_alive" not in report["warned"]
+    msg = [c["detail"] for c in report["checks"]
+           if c["name"] == "genealogy_alive"][0]
+    assert "il sangue" in msg and "freno acceso" in msg
+
+
+def test_a_stale_census_is_spoken():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    _art = json.loads((backend / "factory_genealogy_vault.json").read_text())
+    _art["ts"] = int(now.timestamp()) - 13 * 3600   # older than four turns
+    (backend / "factory_genealogy_vault.json").write_text(json.dumps(_art))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "genealogy_alive" in report["warned"]
+
+
+def test_an_empty_census_is_a_counter_that_forgot():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    _art = json.loads((backend / "factory_genealogy_heart.json").read_text())
+    _art["bodies"] = 0
+    (backend / "factory_genealogy_heart.json").write_text(json.dumps(_art))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "genealogy_alive" in report["warned"]
 
 
 def test_the_real_registry_on_the_real_tree():

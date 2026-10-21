@@ -389,6 +389,19 @@ def main(argv=None) -> int:
     except Exception as _oath_exc:  # noqa: BLE001 - fail-open, spoken
         print(f"[oath] fail-open: {type(_oath_exc).__name__}: {_oath_exc}")
 
+    # R126 -- THE BLOOD'S HEADLINE: one honest word for the CEO's phone
+    # (verdict, collision probability, effective population, the brake's
+    # mark).  Fail-open and spoken, like the weather before it.
+    _blood_note = "n/m"
+    try:
+        _gene = report.get("genealogy") or {}
+        _brk = ":brake" if (_gene.get("brake") or {}).get("applied") else ""
+        _blood_note = (f"{_gene.get('verdict') or 'n/m'}"
+                       f":H{_gene.get('herfindahl')}"
+                       f":Ne{_gene.get('effective_population')}{_brk}")
+    except Exception:  # noqa: BLE001 - fail-open, spoken
+        _blood_note = "n/m"
+
     # R66 — append the honest factory-ledger record.
     date = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
     rec = ledger_mod.FactoryRecord(
@@ -404,6 +417,7 @@ def main(argv=None) -> int:
               f" champ_out={len(report.get('champions') or [])}"
               f" migrants={report.get('diaspora', {}).get('injected', 0)}"
               f" wx={(report.get('weather') or {}).get('label') or 'n/m'}"
+              f" blood={_blood_note}"
               f"{_oath_note}"
               f" {report.get('dna', {}).get('seal') or dna_mod.seal()}"),
     )

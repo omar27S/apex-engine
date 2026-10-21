@@ -470,9 +470,19 @@ def _chat_raw(url: str, model: str, messages: list[dict], *,
     except (KeyError, IndexError, TypeError):
         return {"ok": False, "content": "", "model": model, "usage": {},
                 "error": "malformed response (no choices[0].message.content)"}
+    # W1 (the Dragon's gag): carry the provider's finish_reason so a caller can
+    # tell a COMPLETED word from one the token cap amputated mid-sentence.  The
+    # OpenAI-compatible field is "finish_reason" ("stop" = natural end,
+    # "length" = the cap cut the mouth).  Honest default: None = the provider
+    # said nothing about it (never invented).
+    try:
+        finish = data["choices"][0].get("finish_reason")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        finish = None
     return {"ok": True, "content": content,
             "model": str(data.get("model") or model),
-            "usage": data.get("usage") or {}, "error": None}
+            "usage": data.get("usage") or {}, "error": None,
+            "finish_reason": (finish if isinstance(finish, str) else None)}
 
 
 def _extract_insights(content: str) -> list[dict]:

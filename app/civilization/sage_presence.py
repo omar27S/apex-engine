@@ -20,6 +20,7 @@ is ``None``; a hit-rate with no scored insight is ``None``.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from app.civilization import network, sage as sage_mod
@@ -290,6 +291,26 @@ def _extract_text(env: dict) -> str:
     return str((env or {}).get("content") or "").strip()
 
 
+def _with_state(question: str, context: dict, *, cap: int = 16000) -> str:
+    """THE SAGE'S EYES (W3, the blind-consult wound): no consult without its state.
+
+    Every presence question SAYS "leggi lo stato qui sotto" -- but for weeks the
+    state was never pasted below, so the Sage answered as a blind philosopher
+    (the 2026-10-21 Letter carries its own complaint: "Mandami lo stato e te lo
+    leggo subito").  This glues the LIVE context UNDER the question so the words
+    are finally true.  Bounded (``cap``), honest, never invented: a context that
+    fails to serialize is stringified, never dropped on the floor again.
+    """
+    try:
+        blob = json.dumps(context or {}, default=str)
+    except (TypeError, ValueError):
+        blob = str(context or {})
+    if len(blob) > cap:
+        blob = blob[:cap] + " [...tagliato al limite...]"
+    return (f"{question}\n\n"
+            f"Stato vivo della civilta' (i numeri veri, JSON):\n{blob}")
+
+
 def spontaneous_voice(context: dict, *, backend=None, ts: str = "",
                       question: str = SPONTANEOUS_QUESTION) -> dict:
     """The Sage speaks UNPROMPTED (Flash head): one insight, or honest silence.
@@ -304,7 +325,7 @@ def spontaneous_voice(context: dict, *, backend=None, ts: str = "",
         return {"ok": False, "text": "", "model": "", "backend": getattr(be, "name", "?"),
                 "tag": SPONTANEOUS_TAG, "usage": {}, "error": "backend unavailable",
                 "ts": ts or _now()}
-    env = be.ask(question, deep=False, system=(
+    env = be.ask(_with_state(question, context), deep=False, system=(
         "Sei il Saggio di APEX. Guardi la civilta' e parli SOLO quando vedi qualcosa "
         "di significativo. Non comandi: consigli. Se non vedi nulla, dici: NIENTE."),
         max_tokens=400)
@@ -411,7 +432,8 @@ def dawn_note(context: dict, *, backend=None, ts: str = "", pro: bool = False) -
     if not getattr(be, "available", lambda: False)():
         return {"ok": False, "text": "", "model": "", "usage": {},
                 "error": "backend unavailable", "ts": ts or _now()}
-    env = be.ask(DAWN_QUESTION, deep=True, pro=pro, max_tokens=700)
+    env = be.ask(_with_state(DAWN_QUESTION, context), deep=True, pro=pro,
+                 max_tokens=700)
     text = _extract_text(env)
     return {"ok": bool(env.get("ok")) and bool(text), "text": text,
             "model": env.get("model", ""), "usage": env.get("usage") or {},
@@ -434,7 +456,7 @@ def warning_for_decision(decision: dict, context: dict, *, backend=None,
     q = (f"Il Consiglio sta per decidere: '{what}'. Alla luce dello stato qui sotto, "
          "vedi una contraddizione o un rischio che DEVE essere affrontato prima? "
          "Se si', avverti in 1-3 frasi (non bloccare, avverti). Se no, rispondi: NIENTE.")
-    env = be.ask(q, deep=False, system=(
+    env = be.ask(_with_state(q, context), deep=False, system=(
         "Sei il Saggio di APEX. Avverti, non veti: il Consiglio resta sovrano."),
         max_tokens=400)
     text = _extract_text(env)
@@ -496,7 +518,7 @@ def note_for_ceo(context: dict, *, backend=None, ts: str = "") -> dict:
     be = backend or sage_mod.DeepSeekSageBackend()
     if not getattr(be, "available", lambda: False)():
         return {"ok": False, "text": "", "error": "backend unavailable", "ts": ts or _now()}
-    env = be.ask(CEO_QUESTION, deep=False, max_tokens=400)
+    env = be.ask(_with_state(CEO_QUESTION, context), deep=False, max_tokens=400)
     text = _extract_text(env)
     silent = (not env.get("ok")) or (not text) or text.strip().upper().startswith("NIENTE")
     return {"ok": bool(env.get("ok")) and not silent,
@@ -515,9 +537,10 @@ def question_to_council(context: dict, *, backend=None, ts: str = "") -> dict:
     if not getattr(be, "available", lambda: False)():
         return {"ok": False, "question": "", "error": "backend unavailable",
                 "ts": ts or _now()}
-    env = be.ask("Alla luce dello stato qui sotto, poni al Consiglio UNA domanda che "
-                 "nessuno ha ancora fatto (una sola frase). Se non ne hai, rispondi: "
-                 "NIENTE.", deep=False, max_tokens=300)
+    env = be.ask(_with_state(
+        "Alla luce dello stato qui sotto, poni al Consiglio UNA domanda che "
+        "nessuno ha ancora fatto (una sola frase). Se non ne hai, rispondi: NIENTE.",
+        context), deep=False, max_tokens=300)
     text = _extract_text(env)
     silent = (not env.get("ok")) or (not text) or text.strip().upper().startswith("NIENTE")
     return {"ok": bool(env.get("ok")) and not silent,

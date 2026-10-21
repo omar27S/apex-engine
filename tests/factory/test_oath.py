@@ -165,3 +165,22 @@ class TestHeadline:
         assert oa.headline_note(None) == "oath=n/m"
         assert oa.headline_note({"fields": {"crowned": 0.72}}) == "oath=0.72"
         assert oa.headline_note({"fields": {}}) == "oath=n/m"
+
+
+class TestTheHeartWiring:
+    def test_the_heart_calls_the_oracle_by_his_right_name(self):
+        """2026-10-21 03:06 UTC, the first live beat: the oath spoke
+        fail-open -- 'close_turn() got an unexpected keyword argument
+        island'. The fail-open law held (the shift landed, the ledger row
+        rode), but the oracle stayed silent for a turn. This tripwire
+        reads the heart's own call and pins the keyword: the wound cannot
+        return disguised."""
+        from pathlib import Path as _P
+        heart = _P(__file__).resolve().parents[2] / "tools" / "factory" / "run_factory.py"
+        src = heart.read_text(encoding="utf-8")
+        assert "oath_mod.close_turn(" in src, "the heart must call the oracle"
+        i = src.index("oath_mod.close_turn(")
+        call = src[i:i + 500]
+        assert "machine=island" in call, \
+            "the oracle is called by machine=, never island="
+        assert "island=island" not in call

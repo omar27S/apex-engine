@@ -411,10 +411,24 @@ def _voice(report: dict, st: dict, table: dict, *, civilization, thermometer,
                      "non ho ancora un report da raccontare."))
 
     movers = _biggest_movers(table, n=2)
+    # W4 (the false triumph): a deployable fraction measured on a YOUNG pain
+    # ledger is measured-zero, not measured-safe (the Dragon's own doctrine:
+    # ambition rises only on evidence).  With < 7 nights of the account's memory
+    # of pain, the voice does not celebrate -- it tells the truth instead.
+    _dd_nights = st.get("dd_nights") if isinstance(st, dict) else None
+    _dep_label = next((lbl for lbl, k, _u, _d in TABLE_METRICS
+                       if k == "deployable_pct"), "Fraz. deployabile")
     for label, today, prior, trend in movers:
         if trend.startswith("^^") or trend.startswith("vv"):
-            L.append(f"  Guarda la riga \"{label}\": da {prior} a {today} -- "
-                     f"e' il salto piu' grosso della settimana.")
+            if (label == _dep_label and isinstance(_dd_nights, int)
+                    and 0 <= _dd_nights < 7):
+                L.append(f"  La riga \"{label}\" dice {prior} -> {today}, ma il "
+                         f"registro del dolore ha solo {_dd_nights} notte/i: "
+                         "zero misurato non e' zero sicuro, e la dottrina non "
+                         "celebra l'assenza di prova.")
+            else:
+                L.append(f"  Guarda la riga \"{label}\": da {prior} a {today} -- "
+                         f"e' il salto piu' grosso della settimana.")
     L.append("")
 
     # LA SITUAZIONE
@@ -581,6 +595,18 @@ def build_morning_letter(report: dict, *, civilization: dict | None = None,
         if v is not None and v != "":
             st[k] = v
 
+    # W4 (the young ledger): when the account's memory of pain holds fewer than
+    # 7 nights, the deployable fraction built on it is a MEASURED number on a
+    # YOUNG sample -- the table says so under itself, in the footnotes' voice.
+    _dd_nights = st.get("dd_nights")
+    if (isinstance(_dd_nights, int) and 0 <= _dd_nights < 7
+            and any(row.get("key") == "deployable_pct" and row.get("today") != "--"
+                    for row in table["rows"])):
+        table["footnotes"].append(
+            f"Fraz. deployabile: misurata su sole {_dd_nights} notte/i del registro "
+            "del dolore -- zero misurato non e' zero sicuro; la frazione cresce "
+            "con l'evidenza, non con l'assenza")
+
     L: list[str] = []
     L.append("# APEX -- LA LETTERA DEL MATTINO")
     if date:
@@ -603,12 +629,20 @@ def build_morning_letter(report: dict, *, civilization: dict | None = None,
     # 1b) THE DRAGON'S ANALYSIS (Role 5): the strongest mind's first-person
     #     reflection on the day, rendered AT THE TOP (the CEO reads it with his
     #     coffee). It may CHALLENGE the CEO -- rendered in full, never softened.
+    #     W1: when the provider's token cap amputated the mouth mid-sentence, the
+    #     Letter SAYS SO -- a silenced Dragon is information, not a formatting
+    #     glitch, and hiding it would be the quietest of lies.
     dg = (civ.get("dragon") or (civ.get("diary") or {}).get("dragon") or {})
     dan = dg.get("analysis") or {}
     if dan.get("text"):
         L.append(f"## {dragon_mod.analysis_header()}")
         L.append("")
         L.append(f"_{dan['text']}_")
+        if dan.get("truncated"):
+            L.append("")
+            L.append("_(il pensiero qui sopra e' stato FERMATO dal limite di token "
+                     "-- la bocca del Drago e' stata imbavagliata a meta' frase; "
+                     "la verita' intera arriva col prossimo turno)_")
         L.append("")
 
     # 2) THE VOICE.

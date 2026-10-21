@@ -378,7 +378,7 @@ def main(argv=None) -> int:
     _oath_note = ""
     try:
         _oath_row = oath_mod.close_turn(
-            args.ledger, "factory_oath.jsonl", island=island, facts={
+            args.ledger, "factory_oath.jsonl", machine=island, facts={
                 "crowned": len(report.get("champions") or []) >= 1,
                 "migrants": int((report.get("diaspora") or {})
                                 .get("injected", 0)) >= 1,

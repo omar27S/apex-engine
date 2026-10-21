@@ -318,6 +318,11 @@ def theory_cycle(state: dict, *, ts: str = "") -> dict:
     present, else its latest THOUGHT. The reason names the newest flow observation
     (what the micro-tournaments taught). Honest: with no thought and no analysis there
     is nothing to revise (nothing is written -- never an invented theory).
+
+    W2 (the mid-word cut): the thesis was amputated at a blind ``[:600]`` -- the
+    2026-10-21 Letter showed the theory ending on "Vo" mid-word.  Now the cut
+    lands on a SENTENCE boundary (never mid-word) inside a roomier cap, and when
+    the evidence is longer than the cap the theory says so honestly.
     """
     st = state or {}
     slot = st.get("dragon") or {}
@@ -332,7 +337,8 @@ def theory_cycle(state: dict, *, ts: str = "") -> dict:
         return {"changed": False, "reason": "nessuna evidenza (nessun pensiero)"}
     obs = list((st.get("dragon_mind") or {}).get("observations") or [])
     reason = str(obs[-1].get("text")) if obs else ""
-    return mind_mod.revise_theory(st, thesis=thesis[:600], reason=reason, ts=ts,
+    return mind_mod.revise_theory(st, thesis=_bound_thesis(thesis), reason=reason,
+                                  ts=ts,
                                   evidence={"n_thoughts": len(thoughts),
                                             "n_analyses": len(analyses)})
 
@@ -340,6 +346,39 @@ def theory_cycle(state: dict, *, ts: str = "") -> dict:
 # ---------------------------------------------------------------------------
 # ROLE 2 -- THE RESEARCH DIRECTOR (guides evolution)
 # ---------------------------------------------------------------------------
+
+
+def _bound_thesis(text: str, *, cap: int = 1200) -> str:
+    """Cut the thesis at a SENTENCE boundary, never mid-word (W2).
+
+    The old blind ``[:600]`` amputated the 2026-10-21 theory on "Vo".  This keeps
+    whole sentences inside ``cap``; when no sentence end is found it falls back
+    to the last space; a text already within the cap passes untouched.
+    """
+    t = str(text or "").strip()
+    if len(t) <= cap:
+        return t
+    window = t[:cap]
+    cut = -1
+    for i in range(len(window) - 1, 0, -1):
+        if window[i] in ".!?" and (i + 1 == len(window)
+                                   or window[i + 1] in ' \n\t"”’'):
+            cut = i + 1
+            break
+    if cut <= 0:
+        cut = window.rfind(" ")
+    if cut <= 0:
+        cut = cap
+    return window[:cut].rstrip()
+
+
+def _looks_cut(text: str) -> bool:
+    """Heuristic: a mouth that stops without terminal punctuation was amputated."""
+    t = str(text or "").rstrip()
+    if not t:
+        return False
+    return t[-1] not in ".!?…»\"'’”)]"
+
 
 def _families_digest(context: dict) -> str:
     fams = (context.get("live") or {}).get("families") or {}
@@ -659,14 +698,24 @@ def analysis(context: dict, *, backend=None, ts: str = "", period: str = "day") 
         "personale e ONESTA sulla giornata della civilta': le sue scelte, le sue "
         "contraddizioni, la sua direzione, la sua anima. Scrivi in PRIMA PERSONA. "
         "Se vedi una decisione o una legge che produce cattivi esiti, SFIDA il CEO: "
-        "dillo direttamente, con prove. Italiano, concreto, non adulatorio.")
+        "dillo direttamente, con prove. Italiano, concreto, non adulatorio. "
+        "CHIUDI IL PENSIERO: massimo ~450 parole e finisci con una frase completa -- "
+        "il CEO deve leggere un pensiero terminato, mai uno tagliato a meta'.")
     question = ("Stato vivo + la giornata:\n"
                 + json.dumps(context, default=str)[:16000])
-    env = ask(question, deep=True, system=system, max_tokens=1200, temperature=0.6)
+    # W1 (the gag): 1200 tokens amputated the 2026-10-21 analysis mid-sentence
+    # ("...perche' il_").  The mouth gets room (2000) AND a length discipline in
+    # the prompt, and the envelope now carries whether the provider stopped the
+    # mouth (finish_reason == "length") -- so the Letter can TELL the CEO the
+    # strongest mind was silenced, instead of hiding the amputation.
+    env = ask(question, deep=True, system=system, max_tokens=2000, temperature=0.6)
     text = _extract_text(env).strip()
+    finish = str(env.get("finish_reason") or "").lower()
+    truncated = bool(text) and (finish == "length" or _looks_cut(text))
     return {"ok": bool(env.get("ok")) and bool(text), "text": text,
             "model": env.get("model", ""), "usage": env.get("usage") or {},
-            "period": period, "error": env.get("error")}
+            "period": period, "error": env.get("error"),
+            "truncated": truncated, "finish_reason": finish or None}
 
 
 def challenge(context: dict, *, backend=None, ts: str = "") -> dict:
@@ -705,7 +754,9 @@ def ceo_analyst_cycle(state: dict, *, backend=None, ts: str = "",
         rec = None
         if res.get("ok"):
             rec = {"ts": ts, "text": res["text"], "period": period,
-                   "model": res.get("model", ""), "outcome": None, "correct": None}
+                   "model": res.get("model", ""), "outcome": None, "correct": None,
+                   # W1: the archive remembers whether the mouth was amputated.
+                   "truncated": bool(res.get("truncated"))}
             key = "analyses" if period == "day" else "letters"
             slot[key] = (list(slot.get(key) or []) + [rec])[-30:]
         slot["last_analysis_ts"] = ts

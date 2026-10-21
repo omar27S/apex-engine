@@ -305,6 +305,16 @@ def statistics_from(report: dict, *, volume=None, history=None,
                  else (round(max(_col("measured_dd_r")), 4)
                        if _col("measured_dd_r") else None)),
         "deployable_pct": _deployable_pct,
+        # W4 (the young ledger): how many REAL nights the account's memory of
+        # pain holds behind the deployable fraction -- so the Letter can tell a
+        # measured-on-evidence number from a measured-on-one-night number.
+        # The tournament already stamps nights_realized/nights_in_ledger on the
+        # md block; the strictest count (realized) wins.  Honest: absent -> None.
+        "dd_nights": (md.get("nights_realized")
+                      if isinstance(md.get("nights_realized"), int)
+                      else (md.get("nights_in_ledger")
+                            if isinstance(md.get("nights_in_ledger"), int)
+                            else None)),
         "volume_worst_week": vworst,
         "volume_law": vlaw.get("law_trades_per_week", 5) if isinstance(vlaw, dict) else 5,
         "volume_gap": (round(5 - vworst, 3)

@@ -450,6 +450,41 @@ def test_the_ci_twin_seed_overlap_keeps_its_old_name():
     assert "written twice" not in check["detail"], check["detail"]
 
 
+# --- R133: THE FOSSILS OF TORN MEMORY (the guardian's voice for the
+# civilization state's quarantine evidence) ---------------------------------
+
+def test_fresh_torn_memory_fossils_are_watched():
+    # a torn-memory fossil younger than a day means an organ saved and did
+    # not finish -- a warn said aloud, the evidence kept
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "civilization_state.torn.1790000000.json").write_text("{ torn")
+    os.utime(backend / "civilization_state.torn.1790000000.json",
+             (now.timestamp(), now.timestamp()))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "memory_quarantine" in report["warned"]
+    assert "memory_quarantine" not in report["failed"]
+    check = next(c for c in report["checks"]
+                 if c["name"] == "memory_quarantine")
+    assert "did not finish" in check["detail"], check["detail"]
+
+
+def test_old_torn_memory_fossils_are_evidence_not_wounds():
+    # a fossil older than a day is history the body survived: the evidence
+    # stays, the verdict is clean, the voice names it
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    fossil = backend / "civilization_state.torn.1690000000.json"
+    fossil.write_text("{ torn long ago")
+    old = (now - dt.timedelta(days=3)).timestamp()
+    os.utime(fossil, (old, old))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"]
+                 if c["name"] == "memory_quarantine")
+    assert check["ok"], check["detail"]
+    assert "evidence" in check["detail"], check["detail"]
+
+
 def test_a_disabled_heart_timer_is_watched():
     now = _now()
     backend = _healthy_ward(_tmp(), now=now)

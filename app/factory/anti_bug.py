@@ -594,6 +594,41 @@ def _check_scars_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
                   f"tripwire resolves ({stats['retired']} retired with honour)")
 
 
+def _check_memory_quarantine(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """R133 -- THE FOSSILS OF TORN MEMORY: said aloud, never swept away.
+
+    The civilization's state now saves atomically and keeps three known-good
+    generations (``*.bak1/2/3.json``); a file that could not parse is
+    quarantined as ``*.torn.<ts>.json`` -- EVIDENCE, not garbage. This check
+    is the guardian's voice for those fossils: a fresh one (younger than a
+    day) means an organ saved and did not finish -- a warn said aloud; an
+    old one is a fossil kept honestly (the body survived it, the evidence
+    stays).
+    """
+    now = ctx["now"]
+    torn = sorted(backend.glob("*.torn.*.json"))
+    if not torn:
+        return True, ("no torn-memory fossils (the atomic save keeps the "
+                      "body whole)")
+    fresh = []
+    for p in torn:
+        try:
+            age = (now - _dt.datetime.fromtimestamp(
+                p.stat().st_mtime, _dt.timezone.utc)).total_seconds()
+        except OSError:
+            continue
+        if age < 86400:
+            fresh.append(p.name)
+    if fresh:
+        return False, (f"{len(fresh)} torn-memory fossil(s) in the last day "
+                       f"({', '.join(fresh[:3])}) -- an organ saved and did "
+                       f"not finish; the quarantine kept the evidence and "
+                       f"the memory restored from its generations")
+    names = ", ".join(p.name for p in torn[-3:])
+    return True, (f"{len(torn)} old torn-memory fossil(s) kept as evidence "
+                  f"({names})")
+
+
 def _check_genealogy_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
     """R126 -- THE GENEALOGIST'S PULSE: the blood book breathes, the census
     speaks, and the brake fires when it must.
@@ -662,6 +697,7 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("mouth_alive", "warn", _check_mouth_alive),
     ("history_edge", "warn", _check_history_edge),
     ("scars_alive", "warn", _check_scars_alive),
+    ("memory_quarantine", "warn", _check_memory_quarantine),
     ("genealogy_alive", "warn", _check_genealogy_alive),
 )
 

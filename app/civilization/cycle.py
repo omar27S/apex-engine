@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,23 +74,102 @@ CULTURE: tuple[str, ...] = (
 
 
 class Store:
-    """The civilization's persistent memory, as a single JSON document."""
+    """The civilization's persistent memory, as a single JSON document.
+
+    R133 -- THE MEMORY THAT CANNOT FORGET: this file IS the council's whole
+    memory (cycles of reputations, ledger rows, dreams, the one-brain's
+    theories), and it used to live behind two quiet accidents: ``save``
+    wrote the file IN PLACE (a crash mid-write tore it) and ``load`` turned
+    a torn file into a newborn (silent amnesia -- the next ``save`` would
+    then erase the last whole generation too). The cure has four organs:
+
+    * ATOMIC SAVE -- the payload lands on a tmp sibling, fsyncs, then
+      renames over the target (the kernel's whole-or-old guarantee); a
+      crash mid-save can no longer produce a torn file;
+    * THREE GENERATIONS -- every save rotates the known-good line
+      (``*.bak1.json`` newest .. ``*.bak3.json`` oldest): a load that
+      cannot parse the present falls back one generation at a time;
+    * QUARANTINE, NEVER DELETION -- a torn file is renamed
+      ``*.torn.<unix-ts>.json`` and kept as evidence forever (the
+      guardian watches these fossils and says them aloud);
+    * AMNESIA IS AN EVENT, NEVER A MOOD -- when nothing whole survives,
+      the state is an honest newborn and ``memory_note`` says AMNESIA
+      out loud, so the caller can journal it. A first breath (no file
+      at all) is innocence, and is named innocence.
+    """
+
+    KEEP_GENERATIONS: int = 3
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.state: dict = empty_state()
+        self.memory_note: str = ""
+
+    def _backup(self, gen: int) -> Path:
+        return self.path.parent / f"{self.path.stem}.bak{gen}{self.path.suffix}"
+
+    def _quarantine(self, torn: Path) -> Path:
+        dst = torn.parent / f"{torn.stem}.torn.{int(time.time())}{torn.suffix}"
+        try:
+            torn.rename(dst)
+        except OSError:
+            pass  # a sibling organ already carried the evidence aside
+        return dst
 
     def load(self) -> dict:
-        if self.path.exists():
+        notes: list[str] = []
+        survivors = 0
+        candidates = [self.path] + [self._backup(g)
+                                     for g in range(1, self.KEEP_GENERATIONS + 1)]
+        for gen, cand in enumerate(candidates):
+            if not cand.exists():
+                continue
+            survivors += 1
             try:
-                self.state = backfill_state(json.loads(self.path.read_text()))
+                self.state = backfill_state(json.loads(cand.read_text()))
+                if gen > 0:
+                    notes.append(f"the state was torn; the memory restored "
+                                 f"from {cand.name}")
+                break
             except (OSError, json.JSONDecodeError):
-                self.state = empty_state()
+                if gen == 0:
+                    kept = self._quarantine(cand)
+                    notes.append(f"the state was torn and quarantined as "
+                                 f"{kept.name} (the evidence is kept)")
+                else:
+                    notes.append(f"{cand.name} was unreadable and skipped")
+        else:
+            self.state = empty_state()
+            if survivors:
+                notes.append(f"AMNESIA, said aloud: no whole memory survived "
+                             f"({survivors} torn/unreadable generation(s)); "
+                             f"the civilization is newborn")
+            else:
+                notes.append("no memory file yet (a newborn civilization's "
+                             "first breath)")
+        self.memory_note = "; ".join(notes)
         return self.state
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.state, indent=2, default=str) + "\n")
+        tmp = self.path.parent / f".{self.path.name}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(self.state, indent=2, default=str) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            # rotate the known-good line BEFORE the atomic landing (deep
+            # first: bak2->bak3, bak1->bak2, current->bak1)
+            for gen in range(self.KEEP_GENERATIONS, 1, -1):
+                older, newer = self._backup(gen), self._backup(gen - 1)
+                if newer.exists():
+                    os.replace(newer, older)
+            if self.path.exists():
+                os.replace(self.path, self._backup(1))
+            os.replace(tmp, self.path)  # whole-or-old, never torn
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)  # a failed landing leaves no ghost
 
 
 def empty_state() -> dict:

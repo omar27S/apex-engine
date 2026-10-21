@@ -117,6 +117,26 @@ def _healthy_ward(tmp_path: Path, *, now: dt.datetime,
     # honestly blind, and the guardian reads its own ISO stamp.
     (backend / "signal_live.json").write_text(json.dumps(
         {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ")}))
+    # THE SCAR TISSUE (R121's organ, born 2026-10-21): the body remembers
+    # its wounds and every tripwire resolves inside the synthetic ward.
+    (backend / "scars.json").write_text(json.dumps({
+        "version": 1,
+        "scars": [{
+            "id": "S-TEST", "born": "2026-10-21", "organ": "ward",
+            "wound": "the synthetic ward's own scar (a rehearsal, not a wound)",
+            "guard": "R121 the scar tissue",
+            "tripwire": {"kind": "check", "name": "history_edge"},
+        }],
+    }))
+    # THE HISTORIAN'S VOICE (R118's organ, born 2026-10-20): the deep frame's
+    # health artifact, spoken at the injected now with a fresh edge -- the
+    # organ's own word for the guardian to read (never re-derived).
+    (backend / "history_health.json").write_text(json.dumps({
+        "version": 1, "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "verdict": "healthy", "heals": 30, "bars_healed": 900,
+        "pairs": {"EURUSD": {"edge_ts": int(now.timestamp()) - 3600,
+                             "edge_age_s": 3600, "verdict": "fresh"}},
+    }))
     # a real repo so git answers like on the VM
     subprocess.run(["git", "init", "-q"], cwd=backend, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=backend,
@@ -341,13 +361,14 @@ def test_the_unborn_mouth_is_graced_on_its_birth_day():
     assert check["ok"] is True          # SOFT: an unborn sensor is emptiness
 
 
-def test_the_mouth_six_clocks_all_answer():
+def test_the_mouth_joins_the_roll_of_clocks():
     now = _now()
     backend = _healthy_ward(_tmp(), now=now)
     report = ab.sweep(backend, now=now, runner=Machine(), write=False)
     check = next(c for c in report["checks"] if c["name"] == "heart_scheduled")
     assert check["ok"] is True
-    assert "six organs" in check["detail"]   # the mouth joined the roll
+    # R113 put the mouth on the roll; R118 put the historian on it (seven)
+    assert "seven organs" in check["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -470,3 +491,136 @@ def _tmp() -> Path:
 
 def _no_machine(cmd, cwd=None):
     return 127, ""
+
+
+# ---------------------------------------------------------------------------
+# R118 -- THE HISTORIAN'S CLOCK (the deep frame's age, as the organ told it)
+# ---------------------------------------------------------------------------
+def _health(backend: Path, now: dt.datetime, **over):
+    doc = {
+        "version": 1, "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "verdict": "healthy",
+        "pairs": {"EURUSD": {"edge_ts": int(now.timestamp()) - 3600,
+                             "edge_age_s": 3600, "verdict": "fresh"}},
+    }
+    doc.update(over)
+    (backend / "history_health.json").write_text(json.dumps(doc))
+
+
+def test_a_silent_historian_is_a_watch_after_its_birth():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "history_health.json").unlink()
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "history_edge" in report["warned"]
+
+
+def test_a_stale_voice_is_a_watch():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    _health(backend, now - dt.timedelta(days=3))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "history_edge" in report["warned"]
+
+
+def test_a_fossilizing_edge_is_a_watch():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    _health(backend, now, pairs={"EURUSD": {
+        "edge_ts": int(now.timestamp()) - 200 * 3600,
+        "edge_age_s": 200 * 3600, "verdict": "stale"}})
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "history_edge" in report["warned"]
+
+
+def test_a_voice_that_lies_about_the_body_is_a_watch():
+    import pandas as pd
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    # the REAL parquet edge disagrees with the artifact's claim
+    pq_dir = backend / "data" / "history"
+    pq_dir.mkdir(parents=True)
+    real_edge = int(now.timestamp()) - 7200
+    pd.DataFrame({"ts": [real_edge], "open": [1.1], "high": [1.11],
+                  "low": [1.09], "close": [1.1], "volume": [5.0]}
+                 ).to_parquet(pq_dir / "EURUSD_M15.parquet", index=False)
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "history_edge" in report["warned"]
+
+
+def test_seven_organ_clocks_are_asked_by_name():
+    """R118: the historian's timer joins the organs' census."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "heart_scheduled" not in report["warned"]
+    # the spoken diagnosis names all seven clocks, the historian included
+    msg = [c["detail"] for c in report["checks"] if c["name"] == "heart_scheduled"][0]
+    assert "seven organs" in msg
+    assert "apex-historian.timer: enabled" in msg
+
+
+# ---------------------------------------------------------------------------
+# R121 -- THE SCAR TISSUE (the body remembers, the tripwires resolve)
+# ---------------------------------------------------------------------------
+def test_a_silent_registry_is_amnesia_after_the_birth():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "scars.json").unlink()
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "scars_alive" in report["warned"]
+
+
+def test_a_torn_registry_is_spoken():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "scars.json").write_text("{torn json")
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "scars_alive" in report["warned"]
+
+
+def test_a_scar_whose_tripwire_vanished_is_an_alarm():
+    """A law removed while the wound it guards still has a name."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "scars.json").write_text(json.dumps({
+        "version": 1,
+        "scars": [{
+            "id": "S-GHOST", "born": "2026-10-21", "organ": "ward",
+            "wound": "a scar guarded by a law that no longer exists",
+            "guard": "a removed revolution",
+            "tripwire": {"kind": "check", "name": "a_check_that_was_deleted"},
+        }],
+    }))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "scars_alive" in report["warned"]
+
+
+def test_a_retired_scar_rests_with_honour():
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "scars.json").write_text(json.dumps({
+        "version": 1,
+        "scars": [{
+            "id": "S-OLD", "born": "2026-10-21", "organ": "ward",
+            "wound": "a wound long healed",
+            "guard": "a revolution that became the body itself",
+            "tripwire": {"kind": "check", "name": "a_check_that_was_deleted"},
+            "retired": "2026-10-22",
+        }],
+    }))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    assert "scars_alive" not in report["warned"]
+    msg = [c["detail"] for c in report["checks"] if c["name"] == "scars_alive"][0]
+    assert "remembers 0 wounds" in msg and "1 retired with honour" in msg
+
+
+def test_the_real_registry_on_the_real_tree():
+    """The committed scars.json itself: every wound whole, every tripwire
+    resolving against the REAL check names and the REAL test files."""
+    from app.factory.scars import verify_scars
+    backend = Path(__file__).resolve().parents[2]
+    names = {name for name, _sev, _fn in ab.CHECKS}
+    scars, complaints = verify_scars(backend, check_names=names)
+    assert len(scars) >= 10, "the organism's biography must be present"
+    assert complaints == [], complaints

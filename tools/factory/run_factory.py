@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.core.data import load_parquet  # noqa: E402
 from app.core.pairs import PAIR_PIP  # noqa: E402
 from app.factory import ledger as ledger_mod  # noqa: E402
+from app.factory import oath as oath_mod  # noqa: E402
 from app.factory import dna as dna_mod  # noqa: E402
 from app.factory.factory import FactoryConfig, run_factory  # noqa: E402
 from app.factory.islands import ISLAND_WHEEL  # noqa: E402
@@ -176,8 +177,43 @@ def _load_gating(state_path: str | None) -> dict:
     return dict(gating) if isinstance(gating, dict) else {}
 
 
-def _load_universe(data_dir: str, pairs: list[str], rows: int) -> dict:
+def _stitch_live_edge(m15, tape_rows: list[dict] | None):
+    """R120 -- THE LIVING UNIVERSE: fold the tape's bars beyond the parquet
+    edge onto the frame, in memory (no writes, no contention with the
+    historian). The tape only rides BEYOND the deep edge -- the parquet
+    always wins a collision (the historian's own Law 1). Malformed bars are
+    refused alone, never fatal. Returns (frame, bars_added)."""
+    if not tape_rows:
+        return m15, 0
+    edge = int(m15["ts"].iloc[-1]) if len(m15) else 0
+    from app.data_supply.historian import _valid_apex_bar
+    fresh = [b for b in tape_rows
+             if _valid_apex_bar(b) and int(b["ts"]) > edge]
+    if not fresh:
+        return m15, 0
+    import pandas as _pd
+    stitched = _pd.concat([m15, _pd.DataFrame(fresh)], ignore_index=True)
+    stitched = stitched.sort_values("ts", kind="stable").reset_index(drop=True)
+    return stitched, len(fresh)
+
+
+def _load_universe(data_dir: str, pairs: list[str], rows: int, *,
+                   tape_path: str | None = None) -> dict:
+    """The factory's universe: the deep parquet tail, and -- when the live
+    tape is offered (R120) -- the tape's bars beyond it, so every shift
+    evolves on the market through the LAST CLOSED BAR. Read-only by law:
+    the parquet itself is healed only by the historian, never by a shift."""
+    tape_bars: dict[str, list[dict]] = {}
+    if tape_path:
+        try:
+            from app.data_supply.historian import read_tape
+            per_symbol, _torn, _non_bar = read_tape(tape_path)
+            tape_bars = per_symbol
+        except Exception as _exc:  # fail-open: a dead tape is a fossil frame
+            print(f"  [stitch] tape unreadable, evolving on the deep frame "
+                  f"alone (fail-open): {_exc}", file=sys.stderr)
     universe = {}
+    stitched_total = 0
     for pair in pairs:
         path = Path(data_dir) / f"{pair}_M15.parquet"
         if not path.exists():
@@ -186,7 +222,13 @@ def _load_universe(data_dir: str, pairs: list[str], rows: int) -> dict:
         m15 = load_parquet(str(path))
         if rows:
             m15 = m15.iloc[-rows:].reset_index(drop=True)
+        if pair in tape_bars:
+            m15, added = _stitch_live_edge(m15, tape_bars[pair])
+            stitched_total += added
         universe[pair] = fr.build_frames(m15, pair, PAIR_PIP[pair])
+    if tape_bars:
+        print(f"  [stitch] {stitched_total} live bars folded onto the deep "
+              f"frame across {len(universe)} pairs")
     return universe
 
 
@@ -251,6 +293,9 @@ def main(argv=None) -> int:
                          "one lets through to the full judgement (0, 1]")
     ap.add_argument("--ledger", default=cfg.get("ledger", "factory_ledger.jsonl"),
                     help="R66: the honest band ledger this run appends to")
+    ap.add_argument("--tape", default=cfg.get("tape", "data/live/tape_m15.jsonl"),
+                    help="R120: the live M15 tape stitched onto the deep "
+                         "frame (empty string = the fossil frame, CI-honest)")
     ap.add_argument("--probation-rows", type=int,
                     default=int(cfg.get("probation_rows", 0)),
                     help="R100: the most recent rows every pantry champion is "
@@ -294,11 +339,13 @@ def main(argv=None) -> int:
     probation_universe = None
     if args.probation_rows > 0:
         probation_universe = _load_universe(args.data, pairs,
-                                            args.probation_rows)
+                                            args.probation_rows,
+                                            tape_path=args.tape or None)
         if not probation_universe:
             probation_universe = None  # an absent window is unmeasured, never guessed
 
-    universe = _load_universe(args.data, pairs, args.rows)
+    universe = _load_universe(args.data, pairs, args.rows,
+                               tape_path=args.tape or None)
     if not universe:
         print("no data — nothing to run", file=sys.stderr)
         return 1
@@ -323,6 +370,25 @@ def main(argv=None) -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(report, indent=2, default=str))
 
+    # R119 — THE FORECASTER'S OATH: the shift's own prediction, spoken from
+    # PAST ledger rows only (this row has not been appended yet -- the oath
+    # cannot peek at the outcome it predicts), and the Brier verdict on the
+    # PREVIOUS shift's oath. Fail-open by law: a wounded oracle never blocks
+    # the one commit that must always land.
+    _oath_note = ""
+    try:
+        _oath_row = oath_mod.close_turn(
+            args.ledger, "factory_oath.jsonl", island=island, facts={
+                "crowned": len(report.get("champions") or []) >= 1,
+                "migrants": int((report.get("diaspora") or {})
+                                .get("injected", 0)) >= 1,
+                "fast": float(report["wallclock_seconds"]) < oath_mod.FAST_S,
+                "machine_seconds": float(report["wallclock_seconds"]),
+            })
+        _oath_note = " " + oath_mod.headline_note(_oath_row.get("oath"))
+    except Exception as _oath_exc:  # noqa: BLE001 - fail-open, spoken
+        print(f"[oath] fail-open: {type(_oath_exc).__name__}: {_oath_exc}")
+
     # R66 — append the honest factory-ledger record.
     date = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
     rec = ledger_mod.FactoryRecord(
@@ -338,6 +404,7 @@ def main(argv=None) -> int:
               f" champ_out={len(report.get('champions') or [])}"
               f" migrants={report.get('diaspora', {}).get('injected', 0)}"
               f" wx={(report.get('weather') or {}).get('label') or 'n/m'}"
+              f"{_oath_note}"
               f" {report.get('dna', {}).get('seal') or dna_mod.seal()}"),
     )
     ledger_mod.append([], rec, args.ledger)

@@ -311,7 +311,8 @@ def _check_heart_scheduled(backend: Path, ctx: dict) -> tuple[bool, str]:
     wounded: list[str] = []
     for unit in ("apex-heart.timer", "apex-grand.timer",
                  "apex-guardian.timer", "apex-falcon.timer",
-                 "apex-mouth.timer"):
+                 "apex-mouth.timer",
+                 "apex-historian.timer"):
         rc, out = runner(["systemctl", "is-enabled", unit])
         state = out.strip().lower()
         if rc == 0 and state == "enabled":
@@ -326,7 +327,7 @@ def _check_heart_scheduled(backend: Path, ctx: dict) -> tuple[bool, str]:
         wounded.append(f"apex-hyperfeed.service answers '{state or 'silence'}'")
     if wounded:
         return False, "; ".join(wounded)
-    return True, "all six organs' clocks answer: " + ", ".join(verdicts)
+    return True, "all seven organs' clocks answer: " + ", ".join(verdicts)
 
 
 def _check_letter_of_dawn(backend: Path, ctx: dict) -> tuple[bool, str]:
@@ -446,6 +447,113 @@ def _check_mouth_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
     return True, f"the mouth spoke recently ({int(age)} s since its turn)"
 
 
+HISTORY_HEALTH_FILE = "history_health.json"
+# R118's organ was born 2026-10-20 (the historian's first healing round).
+HISTORIAN_BIRTH = _dt.date(2026, 10, 20)
+# The healer speaks daily at 02:37 UTC; a voice older than 26h is a missed
+# round. The FRAME may honestly age through a weekend (72h market closure
+# plus the supply's lag): the organism is declared wounded at FIVE days.
+HISTORY_ARTIFACT_MAX_AGE_S = 26 * 3600
+HISTORY_EDGE_MAX_AGE_S = 120 * 3600
+
+
+def _check_history_edge(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """R118's clock: the deep frame's age, as the historian told it.
+
+    The guardian reads the ORGAN'S OWN VOICE (history_health.json, spoken
+    every healing round and committed with the state files) -- it never
+    re-derives what an organ can simply tell it. Three questions, in order:
+    (1) did the organ speak at all (a missing artifact on the birth day is
+    emptiness, not a lie; after that it is silence); (2) is the VOICE fresh
+    (a day-old health report guards nothing); (3) is the FRAME alive (the
+    oldest pair's edge younger than five days -- past any weekend, past any
+    single holiday, past the supply's own lag). One truth-probe rides along:
+    the EURUSD parquet's REAL last ts must agree with the artifact's claim
+    -- the guardian trusts, and verifies the easiest thing it can measure.
+    """
+    path = backend / HISTORY_HEALTH_FILE
+    if not path.exists():
+        if ctx["now"].date() <= HISTORIAN_BIRTH:
+            return True, "SOFT: the historian is not installed yet (birth day)"
+        return False, "history_health.json is absent -- the historian never spoke"
+    try:
+        health = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False, "history_health.json cannot be parsed -- a torn voice"
+    ts = health.get("ts")
+    if not isinstance(ts, str) or not ts:
+        return False, "history_health.json carries no ts -- a voice without a clock"
+    try:
+        stamp = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return False, f"history_health.json ts is not ISO: {ts!r}"
+    voice_age = ctx["now"].timestamp() - stamp.timestamp()
+    if voice_age > HISTORY_ARTIFACT_MAX_AGE_S:
+        return False, (f"the historian's voice is {int(voice_age / 3600)}h old "
+                       f"(> {HISTORY_ARTIFACT_MAX_AGE_S // 3600}h) -- the healing "
+                       f"round is not running")
+    pairs = health.get("pairs") or {}
+    if not isinstance(pairs, dict) or not pairs:
+        return False, "history_health.json speaks of no pairs -- an empty census"
+    oldest_pair, oldest_age = None, -1
+    for name, rep in pairs.items():
+        if not isinstance(rep, dict):
+            continue
+        edge_age = rep.get("edge_age_s")
+        if isinstance(edge_age, (int, float)) and edge_age > oldest_age:
+            oldest_pair, oldest_age = name, edge_age
+    if oldest_pair is None:
+        return False, "no pair reports an edge age -- the census forgot to count"
+    if oldest_age > HISTORY_EDGE_MAX_AGE_S:
+        return False, (f"the deep frame is fossilizing: {oldest_pair}'s edge is "
+                       f"{int(oldest_age / 3600)}h old (> "
+                       f"{HISTORY_EDGE_MAX_AGE_S // 3600}h)")
+    # the truth-probe: read the REAL parquet edge of one pair
+    try:
+        import pandas as _pd
+        pq = backend / "data" / "history" / "EURUSD_M15.parquet"
+        real_edge = int(_pd.read_parquet(pq, columns=["ts"])["ts"].iloc[-1])
+        claimed = int((pairs.get("EURUSD") or {}).get("edge_ts", real_edge))
+        if claimed != real_edge:
+            return False, (f"the artifact claims EURUSD edge {claimed} but the "
+                           f"parquet says {real_edge} -- a voice that disagrees "
+                           f"with the body")
+    except Exception:
+        pass  # a probe that cannot run is not a lie; the voice was already read
+    return True, (f"the deep frame lives: oldest edge {oldest_pair} at "
+                  f"{int(oldest_age / 3600)}h, voice {int(voice_age / 3600)}h old")
+
+
+def _check_scars_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """R121 -- THE SCAR TISSUE's pulse: the body remembers, and every
+    memory still points at a living law.
+
+    The registry (scars.json, committed with the state files) carries every
+    wound the organism has ever suffered, each with a TRIPWIRE -- the name
+    of the mechanism that must fire if the wound returns. The guardian
+    verifies: the file parses, every scar is whole, every tripwire
+    RESOLVES (a registered check, an existing test, a live timer). A scar
+    whose tripwire has vanished is an alarm: a law was removed while the
+    wound it guards still has a name. An ABSENT registry on the birth day
+    is emptiness, not a lie; after that it is amnesia.
+    """
+    from app.factory.scars import census, verify_scars
+    path = backend / "scars.json"
+    if not path.exists():
+        if ctx["now"].date() <= _dt.date(2026, 10, 21):
+            return True, "SOFT: the scar tissue is not yet written (birth day)"
+        return False, "scars.json is absent -- the organism forgot its wounds"
+    names = {name for name, _sev, _fn in CHECKS}
+    scars, complaints = verify_scars(backend, check_names=names)
+    if not scars:
+        return False, "scars.json is present but carries no scars (torn or empty)"
+    if complaints:
+        return False, "; ".join(complaints[:3])
+    stats = census(scars)
+    return True, (f"the body remembers {stats['guarding']} wounds and every "
+                  f"tripwire resolves ({stats['retired']} retired with honour)")
+
+
 CHECKS: tuple[tuple[str, str, object], ...] = (
     ("ledger_sealed", "fail", _check_ledger_sealed),
     ("ledger_alive", "warn", _check_ledger_alive),
@@ -460,6 +568,8 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("dd_ledger_grown", "warn", _check_dd_ledger_grown),
     ("hyperfeed_alive", "warn", _check_hyperfeed_alive),
     ("mouth_alive", "warn", _check_mouth_alive),
+    ("history_edge", "warn", _check_history_edge),
+    ("scars_alive", "warn", _check_scars_alive),
 )
 
 

@@ -12,7 +12,10 @@ Twelve checks (one per law of the Director's DNA, in spirit):
 * ledger_alive    -- the heart appended at least one row today (warn: a young
                      day may simply not have beaten yet);
 * seed_arithmetic -- the rotating seed advances by whole strides of 7919
-                     (warn: a manual turn or a CI overlap can interleave);
+                     (warn: a manual turn or a CI overlap can interleave;
+                     a same-machine repeat is the SAME turn written twice,
+                     and is named what it is -- an append whose push died
+                     and a re-run that redrew the deterministic seed);
 * pantry_honest   -- every pantry parses, digest-verifies and holds no ghost
                      (fail: Law 3 -- the pantry is the evolution's memory);
 * pantry_tracked  -- every pantry is under git (fail: an untracked pantry is
@@ -25,8 +28,12 @@ Twelve checks (one per law of the Director's DNA, in spirit):
 * letter_of_dawn  -- after the Grand's hour, today's letter exists (warn until
                      noon, fail after: the CEO must not read silence);
 * dd_ledger_grown -- since the D3 law landed, the account's memory of pain
-                     exists and grew each night (warn through the first
-                     transition day, fail after);
+                     exists and grew each night (read THROUGH the dd_ledger
+                     module's load_ledger contract -- the writer's true shape
+                     is a JSON list, and a physician who re-parses the
+                     patient with his own eyes calls healthy tissue a
+                     tumour); warn through the first transition day, fail
+                     after;
 * hyperfeed_alive -- the live wire's snapshot is fresh (warn: the wire is the
                      FAST eye -- a quiet wire is a sleeping sensor, and the
                      systemd unit restarts it on its own; unborn until the
@@ -180,17 +187,32 @@ def _check_ledger_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
 
 
 def _check_seed_arithmetic(backend: Path, ctx: dict) -> tuple[bool, str]:
-    seeds = [(_seed_of(str(r.get("note") or "")), r.get("machine"))
-             for r in ctx["ledger_rows"][-6:]]
-    seeds = [(s, m) for s, m in seeds if s is not None]
+    # R132: the rows keep their full note so a repeat can be NAMED. Two rows
+    # with the same seed are two different wounds: same machine = the SAME
+    # turn written twice (an append whose push died, then a re-run redrew
+    # the deterministic seed -- stride arithmetic makes every island's next
+    # seed predictable, so a re-run from the same state redraws the same
+    # evolution); different machines = two honest clock-siblings (the CI
+    # twin and the VM body) interleaving turns. The guardian's job is to
+    # say WHICH twin is crying, not to guess.
+    rows = [(_seed_of(str(r.get("note") or "")), r.get("machine"))
+            for r in ctx["ledger_rows"][-6:]]
+    seeds = [(s, m) for s, m in rows if s is not None]
     if len(seeds) < 2:
         return True, "fewer than two seeded rows to judge (honest abstention)"
     bad = None
-    for (prev, _), (nxt, machine) in zip(seeds, seeds[1:]):
+    for (prev, prev_machine), (nxt, machine) in zip(seeds, seeds[1:]):
         delta = (nxt - prev) % SEED_SPAN
         if delta == 0:
-            bad = (f"seed {nxt} repeats {prev} -- two turns drew the same "
-                   f"evolution (concurrent CI + VM run?)")
+            if machine == prev_machine:
+                bad = (f"seed {nxt} repeats on the same machine ({machine}) "
+                       f"-- the same turn was written twice: an append whose "
+                       f"push died, then a re-run redrew the deterministic "
+                       f"seed")
+            else:
+                bad = (f"seed {nxt} repeats across machines ({prev_machine} "
+                       f"-> {machine}) -- two turns drew the same evolution "
+                       f"(concurrent CI + VM run?)")
             break
         if delta % SEED_STRIDE != 0:
             bad = (f"seed stride {delta} is not a whole multiple of "
@@ -357,13 +379,29 @@ def _check_dd_ledger_grown(backend: Path, ctx: dict) -> tuple[bool, str]:
                            "night pending -- transition grace)")
         return False, (f"{ESCALATE_WOUND} dd_ledger.json is MISSING -- the "
                        f"account forgot its pain")
-    ok, payload = _read_json(path)
-    if not ok or not isinstance(payload, dict):
-        return False, "dd_ledger.json does not parse"
-    nights = payload.get("nights") or []
+    # R132 -- THE CONTRACT, NOT A SECOND OPINION: this check once re-parsed
+    # the ledger with its own eyes (``isinstance(payload, dict)`` + a
+    # ``nights`` key) while the writer's TRUE shape -- what grand_night has
+    # written since the first honest night -- is a JSON LIST, exactly what
+    # load_ledger() has accepted from birth. For three hours the guardian
+    # called healthy tissue "does not parse" while the account's memory
+    # was perfectly whole. The writer and the reader share ONE contract
+    # now: the guardian reads THROUGH the module, never past it, and the
+    # verdict speaks the number the memory holds (the accumulated DD),
+    # not just its row count.
+    from app.state import dd_ledger as dd_mod
+    nights = dd_mod.load_ledger(path)
     if not nights:
+        ok, _payload = _read_json(path)
+        if not ok:
+            return False, (f"{ESCALATE_WOUND} dd_ledger.json is unreadable -- "
+                           f"the pain is written in a language no organ "
+                           f"shares")
         return False, "SOFT: dd_ledger.json holds no night yet (transition grace)"
-    return True, f"{len(nights)} night(s) of pain remembered"
+    dd = dd_mod.accumulated_dd(nights)
+    dd_voice = "unmeasured" if dd is None else f"{dd:.2f}R"
+    return True, (f"{len(nights)} night(s) of pain remembered, accumulated "
+                  f"drawdown {dd_voice}")
 
 
 # (name, severity, fn) -- severity: "fail" wounds the verdict, "warn" records

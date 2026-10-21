@@ -104,8 +104,15 @@ def _healthy_ward(tmp_path: Path, *, now: dt.datetime,
     # as ancient -- the same honest arithmetic the live guardian uses)
     _stamp = now.timestamp()
     os.utime(backend / "falcon.json", (_stamp, _stamp))
+    # R132: the ward's pain ledger now carries the WRITER's true shape --
+    # the JSON list grand_night has written since the first honest night
+    # (the guardian once re-parsed this file with its own eyes and called
+    # this exact healthy shape "does not parse" for three live hours).
     (backend / "dd_ledger.json").write_text(json.dumps(
-        {"nights": [{"date": str(now.date()), "dd_r": 1.5}]}))
+        [{"version": 1, "date": "20261020", "seed": 1233420331,
+          "basis": "finalists", "net_r": 1.5, "dd_tonight": 0.5,
+          "dd_basis": "finalists", "equity_after": 1.5,
+          "peak_after": 1.5, "dd_after": 0.0}]))
     # THE LIVE WIRE (check 12, born 2026-10-20): a healthy ward carries the
     # fast eye's FRESH snapshot, stamped at the injected now exactly like the
     # falcon's reading -- one synthetic clock, two eyes, the same arithmetic.
@@ -345,6 +352,102 @@ def test_the_unborn_pain_is_graced_on_transition_day():
     report = ab.sweep(backend, now=now, runner=Machine(), write=False)
     assert "dd_ledger_grown" in report["warned"]
     assert "dd_ledger_grown" not in report["failed"]
+
+
+# --- R132: THE CONTRACT-BLIND PHYSICIAN ------------------------------------
+# The guardian re-parsed the pain ledger with its own eyes (dict + nights)
+# while the writer's true shape is the list load_ledger() has accepted from
+# birth -- three live hours of "does not parse" against healthy tissue.
+# These five proofs nail the contract to the reader's chest.
+
+def test_the_pain_ledger_is_read_through_the_contract():
+    # the WRITER's true shape: the JSON list the Grand has written since its
+    # first honest night -- the guardian must count the night AND speak the
+    # accumulated number the memory holds, never "does not parse"
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "dd_ledger.json").write_text(json.dumps([
+        {"version": 1, "date": "20261020", "seed": 1, "basis": "finalists",
+         "net_r": 72.7, "dd_tonight": 0.0, "dd_basis": "finalists",
+         "equity_after": 72.7, "peak_after": 72.7, "dd_after": 0.0},
+        {"version": 1, "date": "20261021", "seed": 2, "basis": "finalists",
+         "net_r": -9.0, "dd_tonight": 9.0, "dd_basis": "finalists",
+         "equity_after": 63.7, "peak_after": 72.7, "dd_after": 9.0},
+    ]))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "dd_ledger_grown")
+    assert check["ok"], check["detail"]
+    assert "2 night" in check["detail"], check["detail"]
+    assert "9.00R" in check["detail"], check["detail"]
+    assert "parse" not in check["detail"], check["detail"]
+
+
+def test_the_legacy_dict_pain_shape_is_still_graced():
+    # load_ledger() accepts the older {"nights": [...]} dict with equal
+    # grace (its documented retro-compat) -- the contract serves both
+    # generations of writers, and the reader follows the contract
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "dd_ledger.json").write_text(json.dumps(
+        {"nights": [{"date": "20261020", "net_r": 1.5}]}))
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "dd_ledger_grown")
+    assert check["ok"], check["detail"]
+    assert "1 night" in check["detail"], check["detail"]
+
+
+def test_a_torn_pain_ledger_escalates_with_the_truth():
+    # unreadable bytes are a wound ESCALATED and NAMED -- not the lazy
+    # "does not parse" that once covered a healthy list
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "dd_ledger.json").write_text("{not json at all")
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "dd_ledger_grown")
+    assert not check["ok"]
+    assert check["severity"] == "fail", check["detail"]
+    assert "unreadable" in check["detail"], check["detail"]
+
+
+def test_the_same_turn_written_twice_is_named_what_it_is():
+    # R132's second wound: two identical (seed, machine) rows are the SAME
+    # turn written twice -- an append whose push died and a re-run that
+    # redrew the deterministic seed. The guardian says THIS, not the lazy
+    # CI-twin guess (the live wound of 2026-10-21 15:30 UTC).
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "factory_ledger.jsonl").write_text("\n".join([
+        _ledger_row(str(now.date()), "pairs=5 seed=1639233 champ_in=3 dna=v1",
+                    machine="vault"),
+        _ledger_row(str(now.date()), "pairs=5 seed=1647152 champ_in=8 dna=v1",
+                    machine="heart"),
+        _ledger_row(str(now.date()), "pairs=5 seed=1647152 champ_in=8 dna=v1",
+                    machine="heart"),
+    ]) + "\n")
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "seed_arithmetic")
+    assert not check["ok"]
+    assert "written twice" in check["detail"], check["detail"]
+    assert "CI + VM" not in check["detail"], check["detail"]
+
+
+def test_the_ci_twin_seed_overlap_keeps_its_old_name():
+    # the same seed on DIFFERENT machines is still the honest clock-sibling
+    # overlap (the CI twin and the VM body interleaving turns) -- the
+    # guardian kept the old diagnosis for the old wound
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "factory_ledger.jsonl").write_text("\n".join([
+        _ledger_row(str(now.date()), "pairs=5 seed=1647152 champ_in=8 dna=v1",
+                    machine="heart"),
+        _ledger_row(str(now.date()), "pairs=5 seed=1647152 champ_in=8 dna=v1",
+                    machine="atlantis"),
+    ]) + "\n")
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "seed_arithmetic")
+    assert not check["ok"]
+    assert "CI + VM" in check["detail"], check["detail"]
+    assert "written twice" not in check["detail"], check["detail"]
 
 
 def test_a_disabled_heart_timer_is_watched():

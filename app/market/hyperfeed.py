@@ -59,6 +59,9 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import os
+import threading
+import time as _time_mod
 
 import numpy as np
 
@@ -1379,6 +1382,59 @@ async def run(cfg: HyperFeedConfig | None = None, *, seconds: float | None = Non
     return feed.snapshot()
 
 
+WATCHDOG_GRACE_S = 300.0   # 5 min: several write periods, never a rush
+WATCHDOG_POLL_S = 60.0      # the heartbeat the hung loop cannot block
+
+
+def watchdog_verdict(writer_age_s: float | None,
+                     grace_s: float = WATCHDOG_GRACE_S) -> bool:
+    """R129 -- THE REBIRTH WATCHDOG's pure verdict.
+
+    ``True`` means: the writer has been silent longer than the grace and
+    the eye is blind while the body lives -- the honest cure is death and
+    rebirth (systemd's ``Restart=always``).  A writer not yet born (no
+    file, no measure) is innocence, not blindness: the verdict waits.
+    """
+    if writer_age_s is None:
+        return False
+    return float(writer_age_s) > float(grace_s)
+
+
+def _self_watchdog(snapshot_path: Path, *,
+                   grace_s: float = WATCHDOG_GRACE_S,
+                   poll_s: float = WATCHDOG_POLL_S,
+                   _exit=None) -> None:
+    """R129 -- the eye that chooses rebirth over zombie life.
+
+    A plain OS thread -- OUTSIDE asyncio on purpose: it must keep
+    breathing when the event loop itself is the thing that hung (the
+    2026-10-21 wound: the process lived 135 minutes past its last write,
+    the guardian SAID "the fast eye sleeps" three times, and nothing
+    healed it).  The thread reads the snapshot's own mtime; past the
+    grace it prints its suicide note and exits the process HARD -- no
+    finally, no atexit, nothing a hung loop can block -- so systemd's
+    Restart=always rebirths the eye within seconds.  The organ that
+    cannot know why it went blind can still know THAT it is blind.
+    """
+    _exit = _exit or os._exit
+
+    def _run() -> None:
+        while True:
+            _time_mod.sleep(float(poll_s))
+            try:
+                age = _time_mod.time() - Path(snapshot_path).stat().st_mtime
+            except OSError:
+                continue          # not yet born: innocence, not blindness
+            if watchdog_verdict(age, grace_s):
+                print(f"[watchdog] the writer has been silent {age:.0f}s "
+                      f"(> {grace_s:.0f}s): choosing rebirth over zombie "
+                      f"life (exit 81)", flush=True)
+                _exit(81)
+
+    threading.Thread(target=_run, daemon=True,
+                     name="apex-self-watchdog").start()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="THE HYPERFEED -- the live wire (keyless WebSocket market view)")
@@ -1403,6 +1459,10 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     except ImportError:
         pass
+
+    # R129 -- the rebirth watchdog rides every mode (the probe dies young
+    # and never meets the grace; the daemon may hang forever and must not)
+    _self_watchdog(Path(args.snapshot))
 
     if args.probe is not None:
         snap = asyncio.run(run(cfg, seconds=float(args.probe)))

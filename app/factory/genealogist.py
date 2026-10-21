@@ -159,7 +159,10 @@ class BloodBook:
 
     def save(self, path: Path) -> bool:
         try:
-            Path(path).write_text(json.dumps(self.to_dict(), indent=1))
+            # R136: the blood book lands through THE ATOMIC PEN -- a torn book
+            # is the founders forgotten (the cross-turn memory of R126).
+            from app.state import atomic  # noqa: E402
+            atomic.write_json(path, self.to_dict(), indent=1)
             return True
         except OSError:
             return False  # fail-open: the shift runs, the memory does not

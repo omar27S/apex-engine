@@ -140,9 +140,11 @@ def append_night(path: str | Path, *, date: str, seed: int, net_r: float,
     history = with_night(load_ledger(path), date=date, seed=seed, net_r=net_r,
                          basis=basis, dd_tonight=dd_tonight,
                          dd_basis=dd_basis, cap=cap)
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
+    # R136: the pain ledger lands through THE ATOMIC PEN -- whole-or-old,
+    # never torn (the guardian reads this file through load_ledger; a torn
+    # pain is "a language no organ shares", R132's named wound).
+    from app.state import atomic  # noqa: E402 -- local, like every pen import
+    atomic.write_json(path, history)
     return history
 
 

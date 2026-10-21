@@ -170,9 +170,9 @@ def append_history(path: str | Path, reading: dict, *, date: str = "",
     history.append({"version": HISTORY_VERSION, "date": date,
                     "reading": {k: float(v) for k, v in (reading or {}).items()}})
     history = history[-cap:]
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(history, indent=2) + "\n")
+    # R136: the generativity history lands through THE ATOMIC PEN.
+    from app.state import atomic  # noqa: E402
+    atomic.write_json(path, history)
     return history
 
 

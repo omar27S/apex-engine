@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from app.state import atomic  # noqa: E402
 from app.core.data import load_parquet  # noqa: E402
 from app.core.pairs import PAIR_PIP  # noqa: E402
 from app.factory import ledger as ledger_mod  # noqa: E402
@@ -367,8 +368,9 @@ def main(argv=None) -> int:
     )
     report = run_factory(universe, cfg_obj,
                          probation_universe=probation_universe)
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(report, indent=2, default=str))
+    # R136: the NIGHT REPORT lands through THE ATOMIC PEN -- the most-read
+    # door in the body (the letter, the dragon, the sage, the one-brain).
+    atomic.write_json(args.out, report)
 
     # R119 — THE FORECASTER'S OATH: the shift's own prediction, spoken from
     # PAST ledger rows only (this row has not been appended yet -- the oath

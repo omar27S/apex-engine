@@ -29,7 +29,9 @@ __all__ = ["write_json"]
 
 
 def write_json(path: str | Path, payload: Any, *,
-               indent: int = 2, default=str) -> Path:
+               indent: int = 2, default=str,
+               sort_keys: bool = False,
+               ensure_ascii: bool = True) -> Path:
     """Land a JSON document atomically: whole-or-old, never torn.
 
     The payload lands on a hidden tmp sibling in the SAME directory (the
@@ -42,7 +44,9 @@ def write_json(path: str | Path, payload: Any, *,
     tmp = target.parent / f".{target.name}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, indent=indent, default=default) + "\n")
+            fh.write(json.dumps(payload, indent=indent, default=default,
+                                 sort_keys=sort_keys,
+                                 ensure_ascii=ensure_ascii) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, target)  # whole-or-old, never torn

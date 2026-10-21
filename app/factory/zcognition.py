@@ -239,8 +239,9 @@ def load_calibration(path) -> CalibrationLedger:
 
 def save_calibration(ledger: CalibrationLedger, path) -> bool:
     try:
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(ledger.to_dict(), fh, indent=2, default=str)
+        # R136: the calibration ledger lands through THE ATOMIC PEN.
+        from app.state import atomic  # noqa: E402
+        atomic.write_json(path, ledger.to_dict())
         return True
     except (OSError, TypeError, ValueError):
         return False

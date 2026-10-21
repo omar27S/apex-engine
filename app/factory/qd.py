@@ -231,8 +231,9 @@ def load_archive(path) -> QDArchive:
 def save_archive(archive: QDArchive, path) -> bool:
     """Write the atlas (best-effort: the atlas is a passenger, never a gate)."""
     try:
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(archive.to_dict(), fh, indent=2, default=str)
+        # R136: the atlas archive lands through THE ATOMIC PEN.
+        from app.state import atomic  # noqa: E402
+        atomic.write_json(path, archive.to_dict())
         return True
     except (OSError, TypeError, ValueError):
         return False

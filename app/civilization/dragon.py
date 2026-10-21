@@ -494,8 +494,10 @@ def _write_directed(state: dict, *, ts: str) -> dict:
                "reading": (f"{len(kept)} ipotesi dirette del Drago"
                            if hyps else "il Drago non ha ipotesi dirette")}
     try:
-        with open("directed_mutations.json", "w") as fh:
-            json.dump(payload, fh, indent=2, default=str)
+        # R136: the directives land through THE ATOMIC PEN -- the factory
+        # reads this artifact next night; a torn directive is a mute order.
+        from app.state import atomic  # noqa: E402
+        atomic.write_json("directed_mutations.json", payload)
     except OSError as e:
         slot["directives_write_error"] = f"{type(e).__name__}: {e}"
         return {"written": False, "error": slot["directives_write_error"],

@@ -149,9 +149,9 @@ def total_trials(records: list[FactoryRecord]) -> int:
 def write_daily(records: list[FactoryRecord], path: str | Path) -> dict[str, dict]:
     """Write the per-day aggregate to ``path`` as JSON; return it."""
     days = aggregate_daily(records)
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(days, indent=2, sort_keys=True), encoding="utf-8")
+    # R136: the band ledger days land through THE ATOMIC PEN (sort_keys kept).
+    from app.state import atomic  # noqa: E402
+    atomic.write_json(path, days, sort_keys=True)
     return days
 
 

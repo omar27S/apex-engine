@@ -474,6 +474,44 @@ def _voice(report: dict, st: dict, table: dict, *, civilization, thermometer,
         L.append("  Non posso dire quanto sono vicino senza un win rate misurato.")
     L.append("")
 
+    # LE CICATRICI (R121): the CEO reads the ORGANISM's own memory -- how many
+    # wounds the body carries, each with its law and its tripwire -- and the
+    # freshest words of the two youngest organs: what the historian healed
+    # last night, and how well the forecaster knows itself. Fail-open by
+    # law: a letter without scars still speaks its numbers.
+    L.append("**Le cicatrici (che cosa ricorda il corpo).**")
+    try:
+        from app.factory.scars import census as _scar_census, load_scars as _load_scars
+        _stats = _scar_census(_load_scars("scars.json"))
+        L.append(f"  Porto {_stats['guarding']} ferite scritte nel registro "
+                 f"({_stats['retired']} ritirate con onore): ogni ferita ha la "
+                 f"sua legge e il suo allarme, e il guardiano le conta ogni "
+                 f"giro. Chi dimentica le proprie ferite le guarisce due volte.")
+    except Exception:
+        pass
+    try:
+        _hh = json.loads(Path("history_health.json").read_text())
+        _oldest = _hh.get("oldest_edge") or {}
+        L.append(f"  Lo storico ha guarito {_hh.get('heals', 0)} pair "
+                 f"({_hh.get('bars_healed', 0)} barre cucite); la memoria "
+                 f"profonda finisce a {_oldest.get('age_h', '?')} ore fa "
+                 f"(pair piu' vecchio: {_oldest.get('pair', '?')}).")
+    except Exception:
+        pass
+    try:
+        _rows = [json.loads(_x) for _x in
+                 Path("factory_oath.jsonl").read_text().splitlines() if _x.strip()]
+        _graded = [r for r in _rows if r.get("grade")]
+        if _graded:
+            _brier = _graded[-1]["grade"].get("mean_brier")
+            L.append(f"  L'indovino ha votato se stesso: Brier {_brier} "
+                     f"sulla notte passata (0 = profeta, 0.25 = moneta). "
+                     f"Ieri non sapevo dire cosa avrei fatto; oggi lo dico "
+                     f"in numeri, e i numeri si giudicano.")
+    except Exception:
+        pass
+    L.append("")
+
     return L
 
 

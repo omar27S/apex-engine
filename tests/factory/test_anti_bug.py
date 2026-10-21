@@ -617,9 +617,16 @@ def test_a_retired_scar_rests_with_honour():
 
 def test_the_real_registry_on_the_real_tree():
     """The committed scars.json itself: every wound whole, every tripwire
-    resolving against the REAL check names and the REAL test files."""
+    resolving against the REAL check names and the REAL test files.
+
+    The public engine mirror (a DERIVED artifact) does not carry the
+    organism's biography -- in that environment this proof skips, exactly
+    like the data-manifest proof skips without tapes. A scar registry that
+    is absent is not a lie; it is another body's bookshelf."""
     from app.factory.scars import verify_scars
     backend = Path(__file__).resolve().parents[2]
+    if not (backend / "scars.json").exists():
+        pytest.skip("the scar registry is not present in this environment")
     names = {name for name, _sev, _fn in ab.CHECKS}
     scars, complaints = verify_scars(backend, check_names=names)
     assert len(scars) >= 10, "the organism's biography must be present"

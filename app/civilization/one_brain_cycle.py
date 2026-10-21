@@ -204,6 +204,7 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
 
     # --- the theories (System 2): score the standing theory from real evidence
     theories: list[dict] = ob.setdefault("theories", [])
+    newborn = not theories  # R137: a birth gets its first night of grace
     if not theories:
         theories.append(mind.theory(agent="council",
                                     claim="collective attention finds survivors",
@@ -214,6 +215,15 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
                     if float(r.get("adv_lb") or 0) >= 0.45), None)
         mind.score_theory(t, supported=1 if row else 0, weakening=0,
                           falsified=0 if row else 1)
+
+    # --- THE FORGETTING (R137): the theories killed by data leave the ------
+    # working memory (CoALA: forgetting is a function, not an accident). Only
+    # a theory that STOOD through a cycle may retire -- a newborn gets its
+    # first night of grace (a question deserves one full test, not a death
+    # in the same breath it was asked). The falsified retire with honor, the
+    # working list stays small, and the reading says the retirement aloud.
+    retired_now = ([] if newborn else mind.retire_theories(
+        theories, ob.setdefault("retired_theories", [])))
 
     # --- the belief ledger: the revisitation of the world model --------------
     yesterday = ob.get("last_model_belief") or {}
@@ -343,7 +353,10 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         "decisions": decisions, "vetoes": vetoes, "kelly": kelly,
         "packages_detail": packages,
         "model": model, "model_change": model_change,
-        "theories": theories, "belief_ledger": ob["belief_ledger"][-8:],
+        "theories": theories,
+        "theories_retired_now": len(retired_now),
+        "retired_theories": (ob.get("retired_theories") or [])[-12:],
+        "belief_ledger": ob["belief_ledger"][-8:],
         "play": play, "play_items": play_items,
         "synergy": synergy, "generation": gen, "bias_audit": audit,
         "refusals": ob["refusals"][-12:], "veto_calibration": calibration,
@@ -355,7 +368,9 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         f"One Brain v{version}: {len(minds)} mind(s), "
         f"{sum(1 for d in decisions if d.get('decided'))} decision(s), "
         f"umore {mood.get('dominant')}, sinergia {synergy}, "
-        f"modello {'cambiato' if model_change.get('changed') else 'stabile'}")
+        f"modello {'cambiato' if model_change.get('changed') else 'stabile'}"
+        + (f"; {len(retired_now)} teoria/e ritirata/e nell'archivio"
+           if retired_now else ""))
     # THE BRIDGE (the evolution's pantry, honestly read) rides the block: the
     # Letter and the funders can finally SEE the heart's harvest. Honest None
     # when no view was handed in (an older grand renders as before).

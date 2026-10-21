@@ -110,6 +110,33 @@ def score_theory(t: dict, *, supported: int, weakening: int, falsified: int) -> 
     return t
 
 
+def retire_theories(theories: list[dict], retired: list[dict],
+                    *, keep: int = 12, retired_keep: int = 24) -> list[dict]:
+    """THE FORGETTING (R137): a theory killed by data leaves working memory.
+
+    ``score_theory`` kills by data, but nothing ever carried the dead out
+    -- a falsified theory stayed in the working list forever (the live
+    state carried exactly that: one theory, falsified, still standing in
+    the council's eyes night after night). CoALA's frontier: forgetting
+    is a FUNCTION, not an accident -- a memory that remembers everything
+    remembers nothing useful. The falsified retire to ``retired``
+    (bounded, kept with honor like the scars' retired rows); the working
+    list stays small (the oldest beyond ``keep`` retire too -- whatever
+    their status, the freshest claims deserve the council's eyes).
+    Returns the freshly retired entries.
+    """
+    out = [t for t in theories if t.get("status") == "falsified"]
+    staying = [t for t in theories if t.get("status") != "falsified"]
+    while len(staying) > keep:
+        out.append(staying.pop(0))          # the oldest retire first
+    if out:
+        retired.extend(out)
+        if retired_keep > 0:
+            del retired[:-retired_keep]     # even the grave forgets, bounded
+        theories[:] = staying
+    return out
+
+
 def belief_entry(*, agent: str, before: str, after: str, reason: str,
                  ts: str = "") -> dict:
     """One BELIEF LEDGER row: what the agent believed, what it believes now, why.

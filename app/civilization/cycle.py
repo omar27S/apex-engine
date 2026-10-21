@@ -190,7 +190,7 @@ def empty_state() -> dict:
         "cycles": 0,
         "one_brain": {"version": 0, "history": [], "belief_ledger": [],
                       "theories": [], "patterns": [], "generations": [],
-                      "refusals": [], "archive": []},
+                      "refusals": [], "archive": [], "retired_theories": []},
         # THE GAZE: the civilization's eyes and their memory (Part Four). The
         # monitors are what it is watching, the visual library is the shapes it has
         # SEEN, the archive is the photographs of key moments, the flow slots are

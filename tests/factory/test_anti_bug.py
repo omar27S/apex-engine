@@ -41,16 +41,36 @@ class Machine:
     wire (default healthy: 'active').
     """
 
-    def __init__(self, *, free_mb="99999", timer="enabled", service="active"):
+    def __init__(self, *, free_mb="99999", timer="enabled", service="active",
+                 born=None):
         self.free_mb = free_mb
         self.timer = timer
         self.service = service
+        # R135: the rebirth dial -- "show <unit> -p ActiveEnterTimestamp"
+        # answers. None = fresh (born an hour from now, after any file); a
+        # dict maps units to stamps; "MUTE" silences systemd (abstention).
+        self.born = born if born is not None else {}
+
+    def _birth_stamp(self, unit: str) -> str:
+        import datetime as _d
+        stamp = self.born.get(unit)
+        if stamp == "MUTE":
+            return "", 1
+        if stamp is None:
+            when = (_d.datetime.now(_d.timezone.utc)
+                    + _d.timedelta(hours=1))   # fresher than any ward file
+            return when.strftime("%a %Y-%m-%d %H:%M:%S UTC"), 0
+        return stamp, 0
 
     def __call__(self, cmd, cwd=None):
         head = cmd[0]
         if head == "df":
             return 0, f"Avail\n{self.free_mb}\n"
         if head == "systemctl":
+            if "show" in cmd and "ActiveEnterTimestamp" in cmd:
+                unit = cmd[2] if len(cmd) > 2 else ""
+                stamp, rc = self._birth_stamp(unit)
+                return rc, (stamp + "\n") if stamp else ""
             if "is-active" in cmd:
                 if self.service == "active":
                     return 0, "active\n"
@@ -483,6 +503,73 @@ def test_old_torn_memory_fossils_are_evidence_not_wounds():
                  if c["name"] == "memory_quarantine")
     assert check["ok"], check["detail"]
     assert "evidence" in check["detail"], check["detail"]
+
+
+# --- R135: THE BODY SHALL NOT CARRY A DEAD PAST (a process frozen before
+# its organs' birth can never see them -- the nine-day one_brain wound) -----
+
+def test_a_process_frozen_before_its_organs_birth_is_watched():
+    # the 2026-10-21 wound, replayed: the council born Oct 12, the One
+    # Brain's cycle code born NOW -- nine days of a semantic memory that
+    # never thought once, because the process could not see the organ
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "app" / "civilization").mkdir(parents=True)
+    (backend / "app" / "civilization" / "one_brain_cycle.py").write_text(
+        "# born tonight\n")
+    report = ab.sweep(backend, now=now, runner=Machine(born={
+        "apex-council.service": "Mon 2026-10-12 09:00:00 UTC",
+    }), write=False)
+    assert "organs_reborn" in report["warned"]
+    check = next(c for c in report["checks"] if c["name"] == "organs_reborn")
+    assert "apex-council.service" in check["detail"], check["detail"]
+    assert "one_brain_cycle.py" in check["detail"], check["detail"]
+
+
+def test_a_reborn_process_meets_its_organs():
+    # born an hour from now (Machine's fresh dial): the body meets every
+    # organ its code has grown
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "app" / "civilization").mkdir(parents=True)
+    (backend / "app" / "civilization" / "one_brain_cycle.py").write_text(
+        "# born tonight\n")
+    report = ab.sweep(backend, now=now, runner=Machine(), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "organs_reborn")
+    assert check["ok"], check["detail"]
+    assert "born after the code it carries" in check["detail"]
+
+
+def test_a_machine_that_does_not_speak_systemd_abstains():
+    # the ward's systemd is silent: honesty is an abstention, never a guess
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    report = ab.sweep(backend, now=now,
+                      runner=Machine(born={"apex-council.service": "MUTE",
+                                           "apex-hyperfeed.service": "MUTE",
+                                           "apex-queue.service": "MUTE",
+                                           "apex-hawk-eye.service": "MUTE"}),
+                      write=False)
+    check = next(c for c in report["checks"] if c["name"] == "organs_reborn")
+    assert check["ok"], check["detail"]
+    assert "abstention" in check["detail"], check["detail"]
+
+
+def test_only_the_service_own_code_counts():
+    # precision: the market's rebirth (hyperfeed) does not stale the
+    # council -- each organ answers only for the roots it carries
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "app" / "market").mkdir(parents=True)
+    (backend / "app" / "market" / "hyperfeed.py").write_text("# reborn\n")
+    report = ab.sweep(backend, now=now, runner=Machine(born={
+        "apex-council.service": "Mon 2026-10-12 09:00:00 UTC",
+        "apex-hyperfeed.service": "Mon 2026-10-12 09:00:00 UTC",
+    }), write=False)
+    check = next(c for c in report["checks"] if c["name"] == "organs_reborn")
+    assert not check["ok"]
+    assert "apex-hyperfeed.service" in check["detail"], check["detail"]
+    assert "apex-council.service" not in check["detail"], check["detail"]
 
 
 def test_a_disabled_heart_timer_is_watched():

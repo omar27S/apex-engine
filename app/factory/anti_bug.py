@@ -629,6 +629,76 @@ def _check_memory_quarantine(backend: Path, ctx: dict) -> tuple[bool, str]:
                   f"({names})")
 
 
+# R135 -- THE BODY SHALL NOT CARRY A DEAD PAST: every always-on service and
+# the code roots it carries. A long-lived process is a body frozen at its
+# start time; every organ born after that freeze is INVISIBLE to it until
+# it is reborn (the 2026-10-21 confession: the council ran nine days past
+# one_brain_cycle's birth, and the One Brain never thought once).
+ORGAN_CODE_ROOTS: dict[str, tuple[str, ...]] = {
+    "apex-council.service": ("app/civilization", "app/state", "app/core",
+                             "tools/council_cycle.py"),
+    "apex-hyperfeed.service": ("app/market",),
+    "apex-queue.service": ("tools/queue_daemon.py",),
+    "apex-hawk-eye.service": ("tools/hawk_eye.py",),
+}
+
+
+def _check_organs_reborn(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """R135 -- every always-on organ was born after the code it carries.
+
+    The guardian asks each always-on service WHEN IT WAS BORN
+    (``systemctl show -p ActiveEnterTimestamp``) and compares with the
+    newest file in the code roots that service carries. A process born
+    before its own code is a body carrying a dead past: the organs that
+    landed after its start (a new cycle block, a new state module) can
+    never run inside it -- the deploy doctrine says CODE LANDS, THE
+    ORGANS THAT CARRY IT ARE REBORN IN THE SAME WAVE. A machine that
+    does not speak systemd abstains honestly.
+    """
+    runner = ctx["runner"]
+    stale, voices, asked = [], [], 0
+    for unit, roots in ORGAN_CODE_ROOTS.items():
+        rc, out = runner(["systemctl", "show", unit,
+                          "-p", "ActiveEnterTimestamp", "--value"])
+        stamp = out.strip()
+        if rc != 0 or not stamp:
+            continue  # a machine (or a ward) that does not speak abstains
+        asked += 1
+        try:
+            born = _dt.datetime.strptime(
+                stamp.rsplit(" ", 1)[0], "%a %Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue  # an unreadable clock is not a verdict
+        born = born.replace(tzinfo=_dt.timezone.utc)
+        newest, newest_name = 0.0, ""
+        for root in roots:
+            rp = backend / root
+            paths = (rp.rglob("*.py") if rp.is_dir()
+                     else ([rp] if rp.exists() else []))
+            for p in paths:
+                if "__pycache__" in p.parts:
+                    continue
+                m = p.stat().st_mtime
+                if m > newest:
+                    newest, newest_name = m, str(p.relative_to(backend))
+        if not newest_name:
+            continue
+        code_born = _dt.datetime.fromtimestamp(newest, _dt.timezone.utc)
+        if born < code_born:
+            stale.append(unit)
+            voices.append(f"{unit} was born {stamp} but its code was "
+                          f"reborn at {code_born:%Y-%m-%d %H:%M:%S} UTC "
+                          f"({newest_name})")
+    if stale:
+        return False, ("; ".join(voices)
+                       + " -- a process frozen before its organs' birth can "
+                         "never see them: rebirth it")
+    if not asked:
+        return True, ("no always-on service speaks systemd here (honest "
+                      "abstention)")
+    return True, "every always-on organ was born after the code it carries"
+
+
 def _check_genealogy_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
     """R126 -- THE GENEALOGIST'S PULSE: the blood book breathes, the census
     speaks, and the brake fires when it must.
@@ -698,6 +768,7 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("history_edge", "warn", _check_history_edge),
     ("scars_alive", "warn", _check_scars_alive),
     ("memory_quarantine", "warn", _check_memory_quarantine),
+    ("organs_reborn", "warn", _check_organs_reborn),
     ("genealogy_alive", "warn", _check_genealogy_alive),
 )
 

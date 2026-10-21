@@ -1403,7 +1403,7 @@ def watchdog_verdict(writer_age_s: float | None,
 def _self_watchdog(snapshot_path: Path, *,
                    grace_s: float = WATCHDOG_GRACE_S,
                    poll_s: float = WATCHDOG_POLL_S,
-                   _exit=None) -> None:
+                   _exit=None, _stop=None) -> None:
     """R129 -- the eye that chooses rebirth over zombie life.
 
     A plain OS thread -- OUTSIDE asyncio on purpose: it must keep
@@ -1420,6 +1420,8 @@ def _self_watchdog(snapshot_path: Path, *,
 
     def _run() -> None:
         while True:
+            if _stop is not None and _stop.is_set():
+                return          # the test's honourable discharge
             _time_mod.sleep(float(poll_s))
             try:
                 age = _time_mod.time() - Path(snapshot_path).stat().st_mtime

@@ -836,6 +836,16 @@ def _flow_dragon_awareness(state: dict, *, flow_block: dict, ts: str) -> dict:
 # column could never confirm and the cascade starved one voice closer to silence.
 STRUCTURE_PROXIMITY_ATR: float = 0.25
 
+# R145 -- THE THREE MUTE VOICES: the constants of the new pipes.
+# SERIES_WINDOW -- a rolling day of M15 closes per pair (the cascade's returns).
+SERIES_WINDOW: int = 96
+# MACRO_HISTORY_KEEP -- the radar's rolling memory per asset (bounded, never a
+# growing file): a day of five-minute eyes.
+MACRO_HISTORY_KEEP: int = 288
+# MOMENTUM_WINDOW -- the tape's honest session delta: the last eight M15 bars
+# (two hours of real motion), measured in the pair's own pips.
+MOMENTUM_WINDOW: int = 8
+
 
 def _feed_the_macro_column(store_state: dict) -> bool:
     """THE MACRO PIPE (R144): pipe the falcon's raw macro radar into Column 5.
@@ -854,10 +864,116 @@ def _feed_the_macro_column(store_state: dict) -> bool:
     return True
 
 
+def _live_frames(*, readings: dict, night_report: dict, cap: int = 5) -> dict:
+    """R145 -- THE FRAME TUBE: the cycle's ONE live tape build (shared, bounded).
+
+    The hunt's hot pairs first (its own choice), then the volume law's, then the
+    falcon's readings, else the constellation's majors -- until ``cap`` pairs have
+    real tape. A pair with no tape contributes nothing (honest blindness); the
+    frames are TRANSIENT (they are never persisted -- the tube hands them to the
+    columns alive, and the state's serialization never sees them).
+    """
+    from app.quant import signal_generator as sg_mod
+    DEFAULT_PAIRS = ("EURUSD", "GBPUSD", "USDJPY", "EURGBP", "AUDJPY")
+    pairs: list[str] = []
+
+    def _add(p) -> None:
+        p = str(p)
+        if p and p not in pairs:
+            pairs.append(p)
+
+    try:
+        for p in (falcon_mod.select_hot_pairs(readings or {}).get("chosen") or []):
+            _add(p)
+    except Exception:  # noqa: BLE001
+        pass
+    for p in ((night_report.get("volume_law") or {}).get("pairs") or []):
+        _add(p)
+    for p in (readings or {}):
+        _add(p)
+    for p in DEFAULT_PAIRS:
+        _add(p)
+    out: dict = {}
+    for p in pairs:
+        if len(out) >= cap:
+            break
+        try:
+            F = sg_mod.frames_from_tape(p)
+        except Exception:  # noqa: BLE001
+            F = None
+        if F is not None:
+            out[p] = F
+    return out
+
+
+def _feed_the_series_column(store_state: dict, frames_by_pair: dict | None) -> bool:
+    """R145 -- THE SERIES PIPE (twin of the macro pipe): the real series the
+    state's mouths read. One tube, two voices, both BORN reading keys nobody
+    ever wrote:
+
+    * ``state["series"]`` -- the pairs' last SERIES_WINDOW closes from the LIVE
+      tape (prices: the correlation matrix diffs them into returns) plus the
+      macro radar's rolling history (each cycle appends the eye's value, deduped
+      and bounded -- a repeated reading is ONE measurement, never two);
+    * ``state["strategy_series"]`` -- each bloodline's EQUITY CURVE from its
+      per-night career receipts (the cumulative net R per real date; the
+      corrupted ``""`` bucket -- the date-wound's echo -- is skipped, never
+      laundered into a curve).
+
+    Fail-open and honest: no tape and no history leave the keys absent, and an
+    absent key is an unmeasured column, never a fabricated series.
+    """
+    series: dict[str, list[float]] = {}
+    for p, F in (frames_by_pair or {}).items():
+        try:
+            closes = [float(v) for v in
+                      F.exec["close"].to_numpy()[-SERIES_WINDOW:]]
+            if len(closes) >= 3:
+                series[str(p)] = closes
+        except Exception:  # noqa: BLE001
+            continue
+    hist = store_state.setdefault("macro_history", {})
+    for asset, r in (store_state.get("macro_readings") or {}).items():
+        try:
+            val = (r or {}).get("value") if isinstance(r, dict) else None
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                continue
+            pts = hist.setdefault(str(asset), [])
+            if not pts or pts[-1] != round(float(val), 6):
+                pts.append(round(float(val), 6))
+                del pts[:-MACRO_HISTORY_KEEP]
+            if len(pts) >= 6:
+                series[str(asset)] = list(pts)
+        except Exception:  # noqa: BLE001
+            continue
+    if series:
+        store_state["series"] = series
+    curves: dict[str, list[float]] = {}
+    career = store_state.get("family_careers") or {}
+    for fam, entry in (career.get("families") or {}).items():
+        dated = [(str(d), v) for d, v in
+                 ((entry or {}).get("dates") or {}).items() if str(d)]
+        if len(dated) < 2:
+            continue
+        dated.sort(key=lambda kv: kv[0])
+        cum, curve = 0.0, []
+        for _, rec in dated:
+            net = (rec or {}).get("net_r")
+            if isinstance(net, (int, float)) and not isinstance(net, bool):
+                cum += float(net)
+            curve.append(round(cum, 4))
+        if len(curve) >= 2:
+            curves[str(fam)] = curve
+    if curves:
+        store_state["strategy_series"] = curves
+    return bool(series or curves)
+
+
 def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
                        forward_block: dict, ts: str, pair_override: str = "",
                        direction_override: int | None = None,
-                       family_override: str | None = None) -> dict:
+                       family_override: str | None = None,
+                       frames_override: dict | None = None) -> dict:
     """Assemble the Cathedral's live context from the REAL readings (honest).
 
     Each column reads only what was MEASURED: the falcon's regime flags, the level
@@ -897,7 +1013,8 @@ def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
     # COLUMN 2 -- STRUCTURE: price at a structural level (the SMC levels).
     structure_ev = {"at_level": None, "kind": None, "tests": None}
     try:
-        frames_by_pair = store_state.get("frames") or {}
+        frames_by_pair = (frames_override if frames_override is not None
+                          else store_state.get("frames")) or {}
         fr = frames_by_pair.get(pair)
         if fr is not None:
             ex = fr.exec
@@ -914,6 +1031,28 @@ def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
             tol = (float(atr_arr[-1]) * STRUCTURE_PROXIMITY_ATR
                    if atr_arr is not None and len(atr_arr)
                    and np.isfinite(atr_arr[-1]) else None)
+            if tol is None:
+                # R145 -- THE RULER FROM THE TAPE: the live frame carries no ATR
+                # column (the R144 ruler never ran once on production tape -- the
+                # structure column was blind even after its cure). The honest
+                # ruler is MEASURED here, from the same tape's true range: the
+                # mean of the last 14 bars' TR -- the pair's own recent scale,
+                # never a fabricated one.
+                try:
+                    hi_a = ex["high"].to_numpy()
+                    lo_a = ex["low"].to_numpy()
+                    n = min(len(hi_a), len(lo_a), len(close))
+                    if n >= 15:
+                        h14 = hi_a[-15:]
+                        l14 = lo_a[-15:]
+                        c14 = close[-15:]
+                        tr = np.maximum(h14[1:] - l14[1:],
+                                        np.maximum(np.abs(h14[1:] - c14[:-1]),
+                                                   np.abs(l14[1:] - c14[:-1])))
+                        if len(tr) == 14 and bool(np.all(np.isfinite(tr))):
+                            tol = float(np.mean(tr)) * STRUCTURE_PROXIMITY_ATR
+                except Exception:  # noqa: BLE001
+                    tol = None
             if last_close is not None and tol is not None and len(ls.swing_low):
                 near = bool(abs(last_close - float(ls.swing_low[-1])) <= tol
                             or abs(last_close - float(ls.swing_high[-1])) <= tol)
@@ -929,7 +1068,22 @@ def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
     vel = reading.get("tick_velocity")
     cand_dir = direction_override if direction_override in (1, -1) else None
     momentum_ev = {"confirmed": None, "direction": cand_dir}
-    if isinstance(delta, (int, float)) and isinstance(vel, (int, float)):
+    # R145 -- THE DELTA TUBE: the falcon's session_delta was never written (the
+    # column was deaf from birth). The tape speaks when the falcon is mute: the
+    # pair's own closes over the last MOMENTUM_WINDOW M15 bars, in the pair's
+    # own pips -- a REAL measured motion, never a fabricated one.
+    if (not isinstance(delta, (int, float)) or isinstance(delta, bool)) \
+            and frames_override is not None:
+        try:
+            fr = (frames_override or {}).get(pair)
+            closes = fr.exec["close"].to_numpy() if fr is not None else None
+            if closes is not None and len(closes) > MOMENTUM_WINDOW:
+                delta = round((float(closes[-1]) - float(closes[-1 - MOMENTUM_WINDOW]))
+                              / falcon_mod.pip_size(pair), 2)
+        except Exception:  # noqa: BLE001
+            delta = None
+    if isinstance(delta, (int, float)) and not isinstance(delta, bool) \
+            and isinstance(vel, (int, float)) and not isinstance(vel, bool):
         d = 1 if delta > 0 else (-1 if delta < 0 else 0)
         agrees = (d == cand_dir) if cand_dir is not None else True
         momentum_ev = {"confirmed": bool(agrees and abs(float(delta)) >= 20.0
@@ -951,7 +1105,11 @@ def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
     # mutually-uncorrelated group), not a bare claim. No series -> unmeasured.
     beliefs = coll_mod.belief_map(store_state)
     rows = beliefs.get("rows") or []
-    indep = coll_mod.independent_from_series(store_state.get("series") or {})
+    # R145 -- THE BLOODLINES' SERIES: consensus reads the families' equity
+    # curves (state["strategy_series"]), not the pairs' price series -- the
+    # voices are the bloodlines; the cascade's assets are the markets.
+    indep = coll_mod.independent_from_series(
+        store_state.get("strategy_series") or {})
     if indep["measured"]:
         consensus_ev = {"n_independent": indep["n"], "independent": True,
                         "independence_measured": True,
@@ -973,7 +1131,8 @@ def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
 
 
 def _run_the_hunt(store_state: dict, *, regime_block: dict, forward_block: dict,
-                  readings: dict, ts: str) -> dict:
+                  readings: dict, ts: str,
+                  frames_override: dict | None = None) -> dict:
     """THE REAL HUNT (Parts One-Six): the Cathedral, the hunters, the Red Council.
 
     Evaluates the seven columns, runs the confidence cascade and the gate; evaluates
@@ -984,7 +1143,7 @@ def _run_the_hunt(store_state: dict, *, regime_block: dict, forward_block: dict,
     """
     ctx = _cathedral_context(store_state, readings=readings,
                              regime_block=regime_block, forward_block=forward_block,
-                             ts=ts)
+                             ts=ts, frames_override=frames_override)
     cat = cathedral_mod.cathedral_block(store_state, ctx, ts=ts)
     store_state["cathedral_summary"] = cat
 
@@ -1093,7 +1252,8 @@ def _signal_generator_block(store_state: dict, *, night_report: dict, readings: 
                 forward_block=forward_block, ts=ts,
                 pair_override=cand.get("pair") or "",
                 direction_override=cand.get("direction"),
-                family_override=cand.get("family"))
+                family_override=cand.get("family"),
+                frames_override=frames_by_pair)
             cat = cathedral_mod.cathedral_block(store_state, ctx, ts=ts)
             challenge = red_mod.devil_advocate(store_state, {
                 "gate": cat.get("gate"), "columns": cat.get("columns"),
@@ -1729,6 +1889,13 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     #     All fail-open and all honest: an unmeasured axis stays None.
     readings = (store_state.get("falcon") or {}).get("readings") or {}
     regime_block = regime_mod.regime_watch_block(store_state, readings=readings, ts=ts)
+    # R145 -- THE SERIES PIPE + THE FRAME TUBE: ONE live tape build feeds the
+    # state's series mouths (the bloodlines' curves for Column 6, the pairs'
+    # closes + the radar's rolling history for the intermarket cascade) and
+    # rides on into the hunt below (the structure column's swing frames, the
+    # momentum column's honest delta).
+    live_frames = _live_frames(readings=readings, night_report=night_report)
+    _feed_the_series_column(store_state, live_frames)
 
     lb = night_report.get("leaderboard") or []
     backtest_scores = {}
@@ -1791,7 +1958,8 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
             "tick_velocity": (rr or {}).get("tick_velocity")}
         for p, rr in (readings or {}).items()}
     hunt = _run_the_hunt(store_state, regime_block=regime_block,
-                         forward_block=forward_block, readings=readings, ts=ts)
+                         forward_block=forward_block, readings=readings, ts=ts,
+                         frames_override=live_frames)
     cathedral_block = hunt["cathedral"]
     hunters_block = hunt["hunters"]
     red_council_block = hunt["red_council"]

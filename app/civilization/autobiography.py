@@ -74,11 +74,18 @@ def chapter_title(index: int, *, mood: str = "") -> str:
 
 
 def _significant(events: list[dict]) -> list[dict]:
-    """The day's SIGNIFICANT events, in order (an unsignificant day yields none)."""
+    """The day's SIGNIFICANT events, in order (an unsignificant day yields none).
+
+    R142 — THE DEEDS: a kind that starts with ``"deed:"`` is one of the kings'
+    spontaneous acts, recorded in the civilization's diary (the receipt is the
+    diary row itself). A deed is ALWAYS chapter-worthy: the book does not invent
+    days, it reports the ones the civilization actually LIVED. Everything else
+    still needs its kind in ``SIGNIFICANT_KINDS``.
+    """
     out: list[dict] = []
     for e in events or []:
         kind = str((e or {}).get("kind", "")).strip()
-        if kind in SIGNIFICANT_KINDS:
+        if kind in SIGNIFICANT_KINDS or kind.startswith("deed:"):
             out.append(dict(e))
     return out
 
@@ -234,35 +241,51 @@ def distill_generation(state: dict, *, label: str = "", n: int = 30,
     Compresses the chapters' essence -- the arc, the recurring lessons, the beliefs
     adopted -- into one summary feeding the School's curriculum. Honest: with no
     chapters the summary is unmeasured (never invented).
+
+    R142 — THE ANTI-REPRINT GUARD: the album never photographs the same page twice.
+    Only chapters with an index BEYOND the last summary's reach enter the next
+    distillation; a call with no fresh chapter is an honest ``distilled: False``
+    and NOTHING is appended (the old law re-printed the same chapter into summary
+    after summary -- ten identical photographs of one quiet day, and the School
+    read one page forever).
     """
+    auto = autobiography(state)
+    summaries = auto["generation_summaries"]
     rows = chapters(state)[-max(1, int(n)):]
     if not rows:
         return {"distilled": False, "reading": "nessun capitolo da distillare"}
+    last_idx = max((max((int(c) for c in (s.get("chapters") or []) if isinstance(c, int)),
+                        default=0)
+                      for s in summaries), default=0)
+    fresh = [c for c in rows if int(c.get("index") or 0) > last_idx]
+    if not fresh:
+        return {"distilled": False,
+                "reading": "nessun capitolo nuovo: l'album non ristampa la stessa foto"}
     lessons: list[str] = []
-    for c in rows:
+    for c in fresh:
         for lesson in (c.get("lessons") or []):
             if lesson not in lessons:
                 lessons.append(lesson)
     adopted: list[str] = []
-    for c in rows:
+    for c in fresh:
         for b in (c.get("new_beliefs") or []):
             if b not in adopted:
                 adopted.append(b)
-    moods = [str(c.get("mood")) for c in rows if c.get("mood")]
+    moods = [str(c.get("mood")) for c in fresh if c.get("mood")]
     summary = {
-        "label": str(label) or f"{rows[0].get('date')}..{rows[-1].get('date')}",
-        "chapters": [c["index"] for c in rows],
-        "n_chapters": len(rows),
+        "label": str(label) or f"{fresh[0].get('date')}..{fresh[-1].get('date')}",
+        "chapters": [c["index"] for c in fresh],
+        "new_chapters": [c["index"] for c in fresh],
+        "n_chapters": len(fresh),
         "lessons": lessons,
         "beliefs_adopted": adopted,
         "moods": moods,
         "ts": str(ts),
-        "reading": (f"una generazione in essenza: {len(rows)} capitoli, "
+        "reading": (f"una generazione in essenza: {len(fresh)} capitolo/i nuovo/i, "
                     f"{len(lessons)} lezioni, {len(adopted)} convinzioni nuove"),
     }
-    auto = autobiography(state)
-    auto["generation_summaries"].append(summary)
-    del auto["generation_summaries"][:-24]
+    summaries.append(summary)
+    del summaries[:-24]
     return {**summary, "distilled": True}
 
 

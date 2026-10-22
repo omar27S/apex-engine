@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 
+from app.civilization import career as career_mod
 from app.civilization import gaze, mind, one_brain, playground
 
 __all__ = ["run_one_brain", "minds_from_report", "TITANIUM_FLOOR"]
@@ -202,6 +203,18 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
                           hawk=hawk, futures=futures)
     model_change = one_brain.market_model_changed(ob.get("model"), model)
 
+    # --- THE CAREER LEDGER (R142): the civilization's memory of merit across ----
+    #     nights. Each night's leaderboard folds into a per-family LIFETIME record
+    #     (pooled wins/trades, the same Wilson arithmetic the night certifies
+    #     with); a family whose CAREER clears the same bar with a real track record
+    #     is a survivor EVEN ON A NIGHT IT DID NOT WIN -- evidence compounds, it
+    #     does not restart every dawn. Idempotent per (family, date): a re-read
+    #     report replaces its receipt, never a double count.
+    career_ledger = career_mod.career_state(store_state)
+    career_mod.career_step(career_ledger, night_report.get("leaderboard") or [],
+                           date=str(night_report.get("date") or str(ts)[:10]), ts=ts)
+    career_certified = career_mod.certified_families(career_ledger)
+
     # --- the theories (System 2): score the standing theory from real evidence
     theories: list[dict] = ob.setdefault("theories", [])
     newborn = not theories  # R137: a birth gets its first night of grace
@@ -213,8 +226,11 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
     for t in theories:
         row = next((r for r in (night_report.get("leaderboard") or [])
                     if float(r.get("adv_lb") or 0) >= 0.45), None)
-        mind.score_theory(t, supported=1 if row else 0, weakening=0,
-                          falsified=0 if row else 1)
+        # THE CAREER speaks too: a lifetime-certified family IS the market funding
+        # what the many believe -- twenty nights of receipts are as real as one.
+        mind.score_theory(t, supported=1 if (row or career_certified) else 0,
+                          weakening=0,
+                          falsified=0 if (row or career_certified) else 1)
 
     # --- THE FORGETTING (R137): the theories killed by data leave the ------
     # working memory (CoALA: forgetting is a function, not an accident). Only
@@ -241,9 +257,12 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
     vetoes: list[dict] = []
     kelly: list[dict] = []
     # C4 — re-evaluate PAST refusals against tonight's real survivors ("was the
-    # veto right?"). The survivors are the report's certified families.
+    # veto right?"). The survivors are the report's certified families -- and, since
+    # R142, the CAREER-certified ones: a family whose lifetime evidence cleared the
+    # same bar is a survivor even on a night it did not win.
     survivors = sorted({str(r.get("family")) for r in (night_report.get("leaderboard") or [])
-                        if r.get("family") and float(r.get("adv_lb") or 0) >= 0.45})
+                        if r.get("family") and float(r.get("adv_lb") or 0) >= 0.45}
+                       | set(career_certified))
     ob["refusals"] = one_brain.reconsider_refusals(ob.get("refusals") or [],
                                                    survivors=survivors, ts=ts)
     packages = _packages(night_report, store_state, ts)
@@ -286,7 +305,7 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         if shape:
             night_found_survivors = any(
                 float(r.get("adv_lb") or 0) >= 0.45
-                for r in (night_report.get("leaderboard") or []))
+                for r in (night_report.get("leaderboard") or [])) or bool(career_certified)
             mind.remember_pattern(ob.setdefault("patterns", []), agent="council",
                                   shape=shape, resolved_up=night_found_survivors,
                                   ts=ts)
@@ -361,6 +380,7 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         "synergy": synergy, "generation": gen, "bias_audit": audit,
         "refusals": ob["refusals"][-12:], "veto_calibration": calibration,
         "generation_archive": archive,
+        "family_careers": career_mod.career_report(career_ledger),
         "visual": {"context": visual_ctx, "convergent": convergence,
                    "visual_supporters": visual_supporters},
     }

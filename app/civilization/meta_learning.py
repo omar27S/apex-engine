@@ -96,34 +96,100 @@ def learning_efficiency(history: list[dict], *, window: int = 7) -> dict:
 
 
 def curriculum_optimizer(generations: list[dict]) -> dict:
-    """Rank the School's lessons by the survival of the generations that carried them.
+    """Rank the School's lessons by the IMPROVEMENT they carried, not the summit they reached.
+
+    R142 — THE DELTA TEACHER. The old law scored a lesson by the absolute survivors
+    of the generations that carried it; in a civilization where nobody survives yet
+    (the honest present), EVERY lesson scored zero, ``emphasize`` went empty and the
+    ``retire`` list was drawn from ties — the teacher was destroying curriculum at
+    random while the class was still learning to walk. The new law:
+
+    * A lesson's PRIMARY evidence is the DELTA it carried — the generations WITH it
+      vs the generations WITHOUT it (its own era as the control group), measured on
+      survivors (the crown) and on the ranked-mind count (the engagement gradient
+      that lives even at zero survivors). An association, said aloud as one — the
+      teacher recommends, the School decides.
+    * A surviving generation's lesson is STILL emphasized (the sufficient crown —
+      the old law's truth, kept).
+    * Retirement needs COMPARATIVE HARM, seen at least twice: a lesson carried by
+      generations that did measurably WORSE on survivors than their era. Absence of
+      survivors is NOT harm — the old retire-on-absence law dies here.
+    * One appearance is an ANECDOTE, never a curriculum entry: unmeasured, kept.
 
     ``generations`` rows are ``{generation, lessons, survivors, ranked}`` (from
-    ``mind.generation_archive``). A lesson from a generation whose minds survived
-    scores higher; ties break on how often it appears. Honest: no generations -> an
-    empty curriculum (never an invented lesson).
+    ``mind.generation_archive``); ``survivors``/``ranked`` may be a count or a list.
+    Honest: no generations -> an empty curriculum (never an invented lesson).
     """
-    scores: dict[str, dict] = {}
-    for g in generations or []:
-        surv = len(g.get("survivors") or [])
+    def _count(v) -> int:
+        if isinstance(v, (list, tuple, set)):
+            return len(v)
+        if isinstance(v, bool) or v is None:
+            return 0
+        if isinstance(v, (int, float)):
+            return int(v)
+        return 0
+
+    rows = [g for g in (generations or []) if isinstance(g, dict)]
+    carriers: dict[str, list[dict]] = {}
+    for g in rows:
         for les in (g.get("lessons") or []):
-            row = scores.setdefault(str(les), {"lesson": str(les), "appearances": 0,
-                                               "survivors": 0, "generations": []})
-            row["appearances"] += 1
-            row["survivors"] += surv
-            row["generations"].append(g.get("generation"))
-    ranked = sorted(scores.values(),
-                    key=lambda r: (-r["survivors"], -r["appearances"], r["lesson"]))
-    for r in ranked:
-        r["score"] = r["survivors"]
-    emphasize = [r["lesson"] for r in ranked if r["survivors"] > 0][:3]
-    # a lesson is RETIRED when NO generation that carried it ever produced a survivor
-    # (not merely when it was absent from the emphasized few -- that would retire
-    # every lesson beyond the top 3).
-    retire = [r["lesson"] for r in ranked if r["survivors"] == 0][:3]
-    return {"lessons": ranked, "emphasize": emphasize, "retire": retire,
+            carriers.setdefault(str(les), []).append(g)
+
+    scored: list[dict] = []
+    for les, with_gens in carriers.items():
+        with_ids = {id(g) for g in with_gens}
+        era = [g for g in rows if id(g) not in with_ids]
+        appearances = len(with_gens)
+        surv_sum = sum(_count(g.get("survivors")) for g in with_gens)
+        ranked_sum = sum(_count(g.get("ranked")) for g in with_gens)
+        delta_surv = delta_ranked = None
+        if with_gens and era:
+            m_surv_with = surv_sum / len(with_gens)
+            m_surv_out = sum(_count(g.get("survivors")) for g in era) / len(era)
+            m_rk_with = ranked_sum / len(with_gens)
+            m_rk_out = sum(_count(g.get("ranked")) for g in era) / len(era)
+            delta_surv = round(m_surv_with - m_surv_out, 4)
+            delta_ranked = round(m_rk_with - m_rk_out, 4)
+        scored.append({
+            "lesson": les, "appearances": appearances, "survivors": surv_sum,
+            "ranked_minds": ranked_sum, "delta_survivors": delta_surv,
+            "delta_ranked": delta_ranked,
+            "generations": [g.get("generation") for g in with_gens],
+        })
+
+    emphasized: list[str] = []
+    retired: list[str] = []
+    anecdotes = 0
+    for r in scored:
+        enough = r["appearances"] >= 2
+        crowned = r["survivors"] > 0
+        improving = enough and (
+            (r["delta_survivors"] or 0) > 0 or (r["delta_ranked"] or 0) > 0)
+        harmful = (enough and r["delta_survivors"] is not None
+                   and r["delta_survivors"] < 0)
+        if crowned or improving:
+            r["verdict"] = "emphasize"
+            emphasized.append(r["lesson"])
+        elif harmful:
+            r["verdict"] = "retire"
+            retired.append(r["lesson"])
+        elif enough:
+            r["verdict"] = "hold"  # tested enough, no comparative harm: kept
+        else:
+            r["verdict"] = "anecdote"  # one appearance is not a curriculum
+            anecdotes += 1
+        r["score"] = r["survivors"]  # the crown stays the primary rank (legacy)
+
+    ranked = sorted(scored, key=lambda r: (-r["survivors"],
+                                           -(r["delta_survivors"]
+                                             if r["delta_survivors"] is not None
+                                             else -1e9),
+                                           -r["appearances"], r["lesson"]))
+    return {"lessons": ranked, "emphasize": emphasized[:3], "retire": retired[:3],
+            "anecdotes": anecdotes,
             "reading": (f"curriculum: {len(ranked)} lezione/i, "
-                        f"{len(emphasize)} da enfatizzare"
+                        f"{len(emphasized)} da enfatizzare, {len(retired)} in "
+                        f"ritiro comparativo, {anecdotes} aneddotiche"
                         if ranked else "curriculum vuoto: nessuna generazione pesata")}
 
 

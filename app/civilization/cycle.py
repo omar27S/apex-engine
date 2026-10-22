@@ -778,6 +778,19 @@ def _autobiography(state: dict, *, night_report: dict, session: dict, ts: str) -
         if thoughts:
             events.append({"kind": "thought",
                            "reading": str(thoughts[-1].get("text") or ""), "ts": ts})
+        # R142 — THE DEEDS: the kings' spontaneous acts recorded in the night's
+        # diary are the civilization's REAL deeds (authorize, cure, forge...).
+        # A day the kings acted in is not a quiet day: the book reports the deeds
+        # it LIVED, each tagged "deed:<act>" so the autobiography's significance
+        # filter can admit it (the diary row is the receipt, never an invention).
+        for act in (((night_report.get("civilization") or {}).get("diary")
+                     or {}).get("spontaneous_work") or []):
+            a = str((act or {}).get("act") or "").strip()
+            if a:
+                events.append({"kind": f"deed:{a}",
+                               "reading": (f"{act.get('agent')} {a}: "
+                                           f"{act.get('why')}"),
+                               "ts": str(act.get("ts") or ts)})
         # the identity trajectory: the shared beliefs BEFORE this chapter (the last
         # chapter's snapshot) and NOW (the collective's current belief map).
         prev = auto_mod.chapters(state)

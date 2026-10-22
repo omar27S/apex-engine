@@ -23,7 +23,10 @@ from app.core import law
 
 __all__ = [
     "LIVE_DD_CEILING_PCT",
+    "EVIDENCE_HALF_LIFE_NIGHTS",
     "INVIOLABLE_LAWS",
+    "evidence_weight",
+    "witnessed_fraction",
     "deployable_fraction",
     "dd_trend",
     "measured_dd_report",
@@ -32,6 +35,37 @@ __all__ = [
 # The CEO's live account drawdown ceiling. A POLICY constant (the charter), not a
 # research constraint — it never enters a search; it only scales deployed capital.
 LIVE_DD_CEILING_PCT: float = 8.0
+
+# R142 — THE HONEST WITNESS: the nights of realized evidence at which the witness
+# vouches for HALF of the raw fraction. One quiet night must not vouch for the
+# whole account; a season of realized nights can (a Wilson-flavoured shrinkage
+# applied to CAPITAL, not to research — the cage stays lifted for research).
+EVIDENCE_HALF_LIFE_NIGHTS: int = 10
+
+
+def evidence_weight(evidence_nights: int) -> float:
+    """How much of the raw fraction the EVIDENCE can vouch for (0.0 .. 1.0).
+
+    ``w = nights / (nights + EVIDENCE_HALF_LIFE_NIGHTS)``: with the half-life at
+    10 realized nights, one night vouches for 1/11 (~9%), ten for 1/2, forty for
+    4/5. A negative count is refused (fail-closed); ZERO realized nights vouch
+    for NOTHING (0.0) — an unmeasured season never cosigns capital.
+    """
+    n = int(evidence_nights)
+    if n < 0:
+        raise ValueError(f"evidence_nights must be >= 0, got {evidence_nights!r} "
+                         "(fail-closed: never vouch on a negative season)")
+    return n / (n + EVIDENCE_HALF_LIFE_NIGHTS)
+
+
+def witnessed_fraction(raw_fraction: float, *, evidence_nights: int) -> float:
+    """The fraction the EVIDENCE can vouch for: raw x weight, honestly shrunk.
+
+    The raw law (``8 / DD``, capped at 1.0) answers "what WOULD the charter allow";
+    the witnessed fraction answers "what can tonight's EVIDENCE actually stand
+    behind". Thin evidence shrinks toward zero; a season approaches the raw law.
+    """
+    return round(min(1.0, float(raw_fraction)) * evidence_weight(evidence_nights), 6)
 
 # THE INVIOLABLE LAWS (never in discussion). Each is a (number, name, source) where
 # source is the law.py symbol that IS the law — this table NEVER re-declares a
@@ -51,7 +85,8 @@ INVIOLABLE_LAWS: tuple[tuple[int, str, str], ...] = (
 
 
 def deployable_fraction(measured_dd_r: float, *,
-                        ceiling_pct: float = LIVE_DD_CEILING_PCT) -> float:
+                        ceiling_pct: float = LIVE_DD_CEILING_PCT,
+                        evidence_nights: int | None = None) -> float:
     """The fraction of intended capital the CEO may deploy for the current DD.
 
     The 8% LIVE LAW: capital deployed = ceiling / measured DD. Because 1R == the
@@ -60,6 +95,11 @@ def deployable_fraction(measured_dd_r: float, *,
     or non-finite DD is refused (fail-closed) — a deployable fraction computed off
     a missing number could over-lever the account, the one error the charter can
     never make.
+
+    R142 — ``evidence_nights`` (optional): when given, the fraction is WITNESSED —
+    shrunk by how many realized nights stand behind the number (see
+    :func:`evidence_weight`). ``None`` keeps the raw law untouched (the legacy
+    callers and the tests that pin the law itself).
     """
     dd = float(measured_dd_r)
     if dd != dd or dd in (float("inf"), float("-inf")) or dd <= 0.0:
@@ -67,7 +107,10 @@ def deployable_fraction(measured_dd_r: float, *,
                          "(fail-closed: never over-lever on a missing number)")
     if ceiling_pct <= 0.0:
         raise ValueError(f"ceiling_pct must be positive, got {ceiling_pct!r} (fail-closed)")
-    return round(min(1.0, ceiling_pct / dd), 6)
+    raw = round(min(1.0, ceiling_pct / dd), 6)
+    if evidence_nights is None:
+        return raw
+    return witnessed_fraction(raw, evidence_nights=evidence_nights)
 
 
 def dd_trend(realized_dd_r: float, prior_dd_r: float | None) -> dict:
@@ -80,15 +123,22 @@ def dd_trend(realized_dd_r: float, prior_dd_r: float | None) -> dict:
 
 
 def measured_dd_report(realized_dd_r: float, *, prior_dd_r: float | None = None,
-                       ceiling_pct: float = LIVE_DD_CEILING_PCT) -> dict:
+                       ceiling_pct: float = LIVE_DD_CEILING_PCT,
+                       evidence_nights: int | None = None) -> dict:
     """The measured-DD report that rides in EVERY nightly summary (charter act 6).
 
     Reports realized DD honestly, the implied deployable fraction, and the trend —
     so the CEO always sees how much capital the current state could command, and
     whether the answer is growing.
+
+    R142 — THE HONEST WITNESS: with ``evidence_nights`` the report ALSO carries the
+    WITNESSED fraction — the raw law shrunk by how many realized nights stand
+    behind the number. One quiet night must never vouch for the whole account;
+    the implied (raw) fraction stays for continuity, the witnessed one is what
+    the evidence can actually stand behind.
     """
     frac = deployable_fraction(realized_dd_r, ceiling_pct=ceiling_pct)
-    return {
+    out = {
         "realized_dd_r": round(float(realized_dd_r), 4),
         "live_ceiling_pct": ceiling_pct,
         "implied_deployable_fraction": frac,
@@ -97,3 +147,14 @@ def measured_dd_report(realized_dd_r: float, *, prior_dd_r: float | None = None,
         "note": ("DD is DATA, not a cage: research is unlimited; the CEO scales the "
                  "DEPLOYED fraction to hold the account's live DD at <= 8%."),
     }
+    if evidence_nights is not None:
+        w = evidence_weight(evidence_nights)
+        wf = round(frac * w, 6)
+        out["evidence_nights"] = int(evidence_nights)
+        out["evidence_weight"] = round(w, 4)
+        out["witnessed_deployable_fraction"] = wf
+        out["witnessed_deployable_pct"] = round(wf * 100.0, 2)
+        out["note"] += (f" The WITNESSED fraction ({wf * 100.0:.2f}%) is what "
+                        f"{int(evidence_nights)} realized night(s) of evidence "
+                        f"can vouch for; a season approaches the raw law.")
+    return out

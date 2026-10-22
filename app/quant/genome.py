@@ -158,7 +158,12 @@ GENE_BOUNDS: tuple[GeneBound, ...] = (
     GeneBound("session_id", 0, 3, True),
     GeneBound("trend_align", 0, 2, True),        # 0=off, 1=with D1 trend, 2=against
     GeneBound("require_h1_align", 0, 1, True),   # 1=H1 must agree with H4 structure
-    GeneBound("min_confluence", 0, 3, True),     # independent confirmations required
+    GeneBound("min_confluence", 0, 3, True),
+    # R140 -- the Dollar Eye's two genes: blind by default, the eye must be
+    # GROWN by mutation or drawn in newborns, then PROVEN by selection.
+    GeneBound("usd_eye_mode", 0, 1, True),
+    GeneBound("usd_eye_strength", 0.0, 2.0, False),
+     # independent confirmations required
     # institutional seeds
     GeneBound("seed_win_rate", 0.0, 1.0, False),
     GeneBound("seed_payoff", 0.0, 10.0, False),
@@ -290,6 +295,17 @@ class StrategyGenome:
     trend_align: int = 1        # require the D1 trend to agree with the trade
     require_h1_align: int = 1   # require H1 to agree with the H4 structure
     min_confluence: int = 1     # independent confirmations required
+
+    # R140 -- THE DOLLAR EYE: the first gene that looks OUTSIDE the pair. The
+    # causal engine named the dollar the dominant executioner (43/45 losses,
+    # 'macro_push', 2026-10-22) while every other gene watched only the pair's
+    # own tape. mode 0 = blind (every existing genome stays exactly as it
+    # was); 1 = watching. strength = how many sigmas of opposing USD-basket
+    # momentum an entry may not fight. The eye can only REFUSE entries,
+    # never invent them; crosses carry no USD leg and stay blind.
+    usd_eye_mode: int = 0
+    usd_eye_strength: float = 0.8
+
 
     # institutional seed genes
     seed_win_rate: float = 0.5

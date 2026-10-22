@@ -30,6 +30,8 @@ from typing import Mapping
 
 import numpy as np
 
+from app.quant import usd_eye as _usd_eye
+
 from app.core import law
 from app.quant import costs, engine, levels, fitness
 from app.quant.frames import Frames
@@ -287,6 +289,7 @@ def evaluate_pair(
     signals: tuple[np.ndarray, np.ndarray, dict] | None = None,
     vote_cache=None,
     world_seed: int = 0,
+    usd_eye=None,
 ) -> PairReport:
     """Evaluate one genome on one pair (one pre-sliced frame).
 
@@ -320,6 +323,19 @@ def evaluate_pair(
         long_s = long_s & ok_atr
         short_s = short_s & ok_atr
 
+    # R140 -- THE DOLLAR EYE: an entry that fights a dollar move beyond the
+    # genome's threshold is refused BEFORE simulation (the ATR floor's idiom:
+    # the eye can only refuse, never invent). Crosses carry no USD leg and a
+    # stale USD tape is a blind bar -- never a fabricated verdict.
+    _eye_blocked = 0
+    if usd_eye is not None and _usd_eye.usd_leg(F.pair) != 0:
+        _ok_long, _ok_short = _usd_eye.entry_masks(
+            F, usd_eye, float(genome.usd_eye_strength))
+        _eye_blocked = int((long_s & ~_ok_long).sum()
+                           + (short_s & ~_ok_short).sum())
+        long_s = long_s & _ok_long
+        short_s = short_s & _ok_short
+
     lv = _compute_levels(F, genome)
     stop, target = _stop_target_arrays(F, genome, long_s, short_s, lv)
 
@@ -339,6 +355,9 @@ def evaluate_pair(
     # gross winner that inverts under costs counts as the loss it really is.
     stamped = _stamp_costs(sim.trades, F.pair, model)
     trades, killed = _early_stop(stamped, config.streak_kill)
+    _rejected = dict(sim.rejected)
+    if _eye_blocked:
+        _rejected["usd_eye"] = _eye_blocked   # R140: the refused entries, said aloud
     metrics = aggregate(trades, sim.rejected)
     return PairReport(
         pair=F.pair,
@@ -346,7 +365,7 @@ def evaluate_pair(
         trades=trades,
         streak_killed=killed,
         funnel=funnel_counts,
-        rejected=dict(sim.rejected),
+        rejected=_rejected,
     )
 
 
@@ -382,6 +401,11 @@ def evaluate(
     through the identical engine (Phase 4a).
     """
     config = config or EvaluationConfig()
+    # R140 -- THE DOLLAR EYE: built once per evaluation, only when the genome
+    # grew one (mode=1). The universe the evaluator already carries is the
+    # eye's retina: the USD pairs' own tapes, strictly causal, sign-corrected.
+    _usd_index = (_usd_eye.build_usd_index(universe_frames)
+                  if _usd_eye.eye_open(genome) else None)
     statarb_z_by_pair = statarb_z_by_pair or {}
     signals_by_pair = signals_by_pair or {}
     per_pair: dict[str, PairReport] = {}
@@ -394,6 +418,7 @@ def evaluate(
             statarb_z=statarb_z_by_pair.get(pair),
             signals=signals_by_pair.get(pair),
             vote_cache=vote_cache, world_seed=world_seed,
+            usd_eye=_usd_index,
         )
         per_pair[pair] = rep
         pooled.extend(rep.trades)

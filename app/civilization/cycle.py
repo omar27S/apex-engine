@@ -582,6 +582,35 @@ def _forge_ideas(state: dict, *, session: dict, ts: str) -> None:
             idea["forged_ts"] = ts
 
 
+def _act_identity(rec: dict) -> tuple[str, str, str]:
+    """The identity of a spontaneous act: WHAT was asked, by WHOM, WHY --
+    the timestamp is when it was said, not what was said."""
+    return (str(rec.get("agent") or ""), str(rec.get("act") or ""),
+            str(rec.get("why") or ""))
+
+
+def record_spontaneous(records: list, items: list, *, keep: int = 30) -> list:
+    """R141 -- THE DIARY'S ECHO HEALED.
+
+    The same play proposed again next cycle (the kings re-ask every beat)
+    differed only by its timestamp, so the old ``it not in`` guard never
+    matched and the diary recorded the same act twice a night -- the
+    Dragon's testimony: "i blocchi evento delle 02:38 e delle 04:24 sono
+    identici in ogni campo: replay o difetto di idempotenza". The identity
+    of an act is (agent, act, why): one night, one act, one record. The
+    window keeps the last ``keep``.
+    """
+    out = list(records or [])
+    said = {_act_identity(r) for r in out[-keep:]}
+    for it in items or []:
+        ident = _act_identity(it)
+        if ident in said:
+            continue
+        said.add(ident)
+        out.append(it)
+    return out[-keep:]
+
+
 def _spontaneous_work(state: dict, *, agents: list[str], ts: str) -> list[dict]:
     """THE FREEDOM DOCTRINE (Part Three, item 11): free agents ask for work.
 
@@ -1561,10 +1590,8 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     #     (voluntary/assigned), the Balance Law's advice, the circadian phase, and
     #     the streams' vital signs. Honest: an axis with no data stays "non misurato".
     spontaneous_items = _spontaneous_work(store_state, agents=agents, ts=ts)
-    for it in spontaneous_items:
-        if it not in store_state["spontaneous_work"]:
-            store_state["spontaneous_work"].append(it)
-    store_state["spontaneous_work"] = store_state["spontaneous_work"][-30:]
+    store_state["spontaneous_work"] = record_spontaneous(
+        store_state["spontaneous_work"], spontaneous_items)
     acts = living_mod.record_life(
         store_state, agents=agents, ts=ts,
         thought_agents=[str(d.get("author") or "council") for d in session["decisions"]],

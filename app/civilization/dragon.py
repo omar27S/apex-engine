@@ -196,7 +196,8 @@ def think(context: dict, *, backend=None, deep: bool = True, ts: str = "",
         + (f"Focus: {focus}\n" if focus else "")
         + (continuity + "\n\n" if continuity else "")
         + json.dumps(context, default=str)[:16000])
-    env = ask(question, deep=deep, system=system, max_tokens=900, temperature=0.5)
+    # R141 -- a single idea deserves to be said whole: 900 -> 1200.
+    env = ask(question, deep=deep, system=system, max_tokens=1200, temperature=0.5)
     text = _extract_text(env).strip()
     silent = (not text) or text.upper().startswith("NIENTE")
     return {"ok": bool(env.get("ok")) and not silent,
@@ -563,7 +564,10 @@ def judge_decision(decision: dict, context: dict, *, backend=None, ts: str = "")
         "ragione in una riga. Abbi il coraggio di dissentire quando serve. Italiano.")
     question = ("Decisione: " + json.dumps(decision, default=str)[:2000]
                 + "\nStato: " + json.dumps(context, default=str)[:8000])
-    env = ask(question, deep=True, system=system, max_tokens=400, temperature=0.3)
+    # R141 -- THE GAG HEALED: 400 tokens guillotined the verdict's reasoning
+    # mid-sentence ("la verita' intera arriva col prossimo turno"); a verdict
+    # without its whole reasoning is a diary entry, not a judgment.
+    env = ask(question, deep=True, system=system, max_tokens=1200, temperature=0.3)
     text = _extract_text(env).strip()
     up = text.upper()
     verdict = ("approve" if "APPROVO" in up else

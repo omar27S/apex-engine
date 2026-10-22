@@ -38,7 +38,6 @@ __all__ = [
 # Family groups — a coarse partition of the 44 families. Deliberately broad:
 # a realm should hold a coherent school of thought, not a single family.
 FAMILY_GROUPS: dict[str, str] = {
-    "trend": "trend",
     "macd_momentum": "momentum",
     "momentum_ignition": "momentum",
     "fvg_momentum": "momentum",
@@ -82,6 +81,17 @@ FAMILY_GROUPS: dict[str, str] = {
     "mtf_divergence": "pattern",
     "fib_ote_confluence": "pattern",
     "trend_pullback": "trend",
+    # R146 -- THE TWO BOOKS, ONE BLOOD: the pyramid sealed these domains long
+    # ago (ml_gradient_boosting: Trend, ml_lstm_pattern: Trend,
+    # ml_bayesian_regime: Volatility) but the realms book never learned them --
+    # the learned blood sat in the "unknown" cell and the sky column judged it
+    # by the general law. The translation is by their measured nature, not an
+    # invention: the boosted stumps and the recurrent readout PREDICT DIRECTION
+    # (they want a moving market -- trend blood), and the Bayesian posterior
+    # fires on REGIME CHANGE (a burst rider -- volatility blood).
+    "ml_gradient_boosting": "trend",
+    "ml_lstm_pattern": "trend",
+    "ml_bayesian_regime": "volatility",
     "ensemble": "ensemble",
 }
 

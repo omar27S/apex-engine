@@ -566,6 +566,32 @@ def run_factory(universe, config: FactoryConfig, *,
     _births: list[gene_mod.Birth] = []
     _brake = {"applied": False, "sibling_mates_avoided": 0,
               "immigrants": 0, "reason": "il sangue era diversificato"}
+    # R143 -- THE GENE FLOOD's SEED: the one-blood streak is a PERSISTENT blood
+    # measurement.  The previous run's genealogy artifact carries where the
+    # collapse stood; a torn, absent, or pre-flood artifact is a fresh streak
+    # (fail-open: an invented collapse would flood on a lie, so it never is).
+    # The measured collapse (every island one-blood, every night) does not
+    # restart with every run -- and neither does its cure's escalation.
+    _one_blood_streak = 0
+    try:
+        _prev_gene = json.loads(
+            Path(f"factory_genealogy_{config.island}.json").read_text())
+        _one_blood_streak = int(_prev_gene.get("brake_streak") or 0)
+    except Exception:
+        _one_blood_streak = 0
+    _one_blood_streak = max(0, _one_blood_streak)
+
+    def _flood_families(config) -> list[str]:
+        """R143 -- the flood's table: every family the weighted draw itself
+        would consider, minus the groups the regime gating has paused.  A
+        founder the tournament would not judge is not a founder, it is noise.
+        No config gating -> the full eligible table (the honest default)."""
+        try:
+            paused = _paused_groups(config)
+        except Exception:
+            paused = set()
+        return [f for f in breeding.eligible_families()
+                if _group_of(f) not in (paused or set())]
 
     def _sight(g, op: str = "seed", parents: tuple = ()) -> None:
         sig = str(g.signature())
@@ -897,9 +923,17 @@ def run_factory(universe, config: FactoryConfig, *,
                         for g in elites}
         _elite_h = gene_mod.herfindahl(gene_mod.census(_elite_blood))
         _brake_on = _elite_h >= gene_mod.VERDICT_THRESHOLDS["concentrating"]
-        _immigrants_n = (gene_mod.BRAKE_IMMIGRANTS
-                         if _elite_h >= gene_mod.VERDICT_THRESHOLDS["one_blood"]
-                         else 0)
+        # R143 -- THE GENE FLOOD: the streak is the measurement that escalates.
+        # A one-blood night gets the drip (4 founders, exactly as R127); a
+        # one-blood STREAK (persistent across runs -- the collapse the letter
+        # has measured every night for weeks) gets the WAVE: a bounded share of
+        # the children as family-spread fresh founders.  The population never
+        # changes, the pairs never change, every sizing rule untouched: only
+        # the WIDTH of the new blood grows, and it recedes the moment the
+        # census says the blood is diverse again.
+        _one_blood_streak = gene_mod.blood_streak(_one_blood_streak, _elite_h)
+        _immigrants_n = gene_mod.flood_wave(_one_blood_streak, config.population)
+        _flood = (_one_blood_streak >= gene_mod.FLOOD_STAGNATION)
         if _brake_on:
             _brake["applied"] = True
             _brake["reason"] = (
@@ -907,8 +941,17 @@ def run_factory(universe, config: FactoryConfig, *,
                 f"{_elite_h:.3f}): i partner preferiti hanno sangue diverso")
         if _immigrants_n:
             _brake["immigrants"] = _immigrants_n
-            _brake["reason"] = (f"one-blood (H={_elite_h:.3f}): "
+            _brake["reason"] = (f"one-blood (H={_elite_h:.3f}) da "
+                                f"{_one_blood_streak} generazioni: "
                                 f"{_immigrants_n} immigrati freschi entrano "
+                                "nella generazione")
+        if _flood:
+            _brake["flood"] = True
+            _brake["flood_streak"] = _one_blood_streak
+            _brake["reason"] = (f"L'ONDATA DI SANGUE NUOVO (H={_elite_h:.3f}, "
+                                f"{_one_blood_streak} generazioni di "
+                                f"one-blood): {_immigrants_n} fondatori "
+                                "freschi sparsi su tutte le famiglie entrano "
                                 "nella generazione")
         n_child = max(0, config.population - len(elites) - _immigrants_n)
         for i in range(n_child):
@@ -965,10 +1008,22 @@ def run_factory(universe, config: FactoryConfig, *,
         # R127 -- the fresh immigrants ride BESIDE the bred children (they
         # replaced their slots in n_child, so the pool stays exactly
         # config.population).  A newborn immigrant is its own founder.
-        for _ in range(_immigrants_n):
-            _ig = _new_genome()
-            _sight(_ig, op="immigrant")
-            children.append(_ig)
+        # R143 -- in a FLOOD the wave is FAMILY-SPREAD: every family the table
+        # would judge gets its founders (a wave drawn from one family would be
+        # a new monoculture, not a cure).  In the drip the draw stays exactly
+        # as R127 drew it (weighted, gated, byte-identical).
+        if _flood:
+            _wave = gene_mod.spread_families(
+                _immigrants_n, _flood_families(config), rng)
+            for _fam in _wave:
+                _ig = breeding.random_genome(rng, family=_fam)
+                _sight(_ig, op="immigrant")
+                children.append(_ig)
+        else:
+            for _ in range(_immigrants_n):
+                _ig = _new_genome()
+                _sight(_ig, op="immigrant")
+                children.append(_ig)
         scored = _evaluate_pool(children)
 
     # --- R73 realms + R71b CMA-ES on the finalists -------------------------
@@ -1245,7 +1300,7 @@ def run_factory(universe, config: FactoryConfig, *,
                     for g, _f in final_scored}
     _gene_block = gene_mod.artifact(
         island=config.island, blood_map=_final_blood, births=_births,
-        book=_book, brake=_brake)
+        book=_book, brake=_brake, brake_streak=_one_blood_streak)
     try:
         _alive = set(_final_blood)
         _alive |= {str(StrategyGenome.from_dict(r["genome"]).signature())

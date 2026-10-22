@@ -336,6 +336,7 @@ def random_genome(
     concrete: bool = False,
     ensemble_quota: float = 0.0,
     layers_quota: float = 0.0,
+    family: str | None = None,
 ) -> StrategyGenome:
     """A fresh random genome, every gene drawn inside the law.
 
@@ -350,10 +351,18 @@ def random_genome(
     MULTI-LAYER coordination stack (strategic D1 + tactical H4 above the execution
     M15). Ignored when ``concrete`` (a leaf must stay flat). Honest: 0.0 leaves the
     classic flat genome unchanged (byte-identical).
+
+    R143 — ``family`` (optional) names the family outright: the genes are drawn
+    exactly as the weighted draw would draw them for that family; only the CHOICE
+    of family is the caller's (the gene flood spreads its founder wave across the
+    table). ``None`` leaves the weighted draw byte-identical, quota and all.
     """
-    family = _draw_family(rng, concrete)
-    if not concrete and ensemble_quota > 0.0 and rng.random() < ensemble_quota:
-        family = ENSEMBLE_FAMILY  # R55 — dedicated evolutionary pressure
+    if family is None:
+        family = _draw_family(rng, concrete)
+        if not concrete and ensemble_quota > 0.0 and rng.random() < ensemble_quota:
+            family = ENSEMBLE_FAMILY  # R55 — dedicated evolutionary pressure
+    else:
+        family = str(family)
     genes = _draw_genes(rng, family)
     if family == ENSEMBLE_FAMILY:
         genes = _attach_ensemble(genes, rng)
@@ -363,6 +372,16 @@ def random_genome(
         genes["layers"] = _draw_layers(family, rng)
     # from_dict clamps and ignores unknown keys — the final safety net.
     return StrategyGenome.from_dict(genes)
+
+
+def eligible_families(concrete: bool = False) -> list[str]:
+    """The table's eligible family names (R143: the flood spreads across them).
+
+    The same list the weighted draw samples from -- nothing invented, nothing
+    hidden: a founder wave drawn from this list is a founder the tournament
+    was already willing to judge.
+    """
+    return list(_eligible_families(concrete))
 
 
 def _draw_layers(execution_family: str, rng: np.random.Generator) -> tuple[dict, ...]:

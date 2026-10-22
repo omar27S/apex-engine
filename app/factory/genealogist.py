@@ -40,12 +40,26 @@ sizing rule -- it only widens the choice of mates inside the elites the
 selection already made.  Observed, never obeyed: the census is spoken in
 the report even when the verdict is quiet.
 
+R143 -- THE GENE FLOOD lives here too, as pure law.  The brake's 4 founders
+a night are a spice; the measured collapse (every island one-blood, every
+night, Ne 0.48..0.82, learning acceleration -171%) is a DESERT, and a
+desert does not heal one immigrant at a time.  The flood escalates by the
+STREAK of consecutive one-blood generations (persistent across runs --
+the collapse predates any single run): a streak of one or two gets the
+drip, a streak of three or more gets a WAVE of fresh founders spread
+across the family table (a wave of one family would be a new monoculture,
+not a cure).  The flood still never touches the population size, the pair
+universe, or any sizing rule: founders REPLACE children the same way the
+drip's immigrants always have -- only the WIDTH of the new blood grows,
+and it recedes the moment the census says the blood is diverse again.
+
 Build Mode: pure functions + a tiny persisted book; no I/O at import.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +69,8 @@ __all__ = [
     "VERDICT_THRESHOLDS",
     "BRAKE_TRIES",
     "BRAKE_IMMIGRANTS",
+    "FLOOD_STAGNATION",
+    "FLOOD_MAX_SHARE",
     "Birth",
     "BloodBook",
     "census",
@@ -63,6 +79,9 @@ __all__ = [
     "sibling_matings",
     "verdict",
     "choose_mate",
+    "blood_streak",
+    "flood_wave",
+    "spread_families",
     "artifact",
 ]
 
@@ -77,6 +96,18 @@ VERDICT_THRESHOLDS = {"concentrating": 0.25, "one_blood": 0.50}
 # may carry (a spice, not a takeover).
 BRAKE_TRIES = 8
 BRAKE_IMMIGRANTS = 4
+
+# R143 -- THE GENE FLOOD's law: a one-blood STREAK of this many consecutive
+# measured generations turns the drip into a wave.  The streak is persistent
+# (carried in the genealogy artifact), so a collapse measured across nights
+# does not restart with every run.
+FLOOD_STAGNATION: int = 3
+
+# The wave's ceiling: at most this share of the population may be fresh
+# founders in any one generation.  A bounded flood -- a restart of diversity,
+# never a replacement of the search (the elites and the bred children keep
+# the majority; the population count never moves).
+FLOOD_MAX_SHARE: float = 0.15
 
 
 # ---------------------------------------------------------------------------
@@ -266,11 +297,68 @@ def choose_mate(candidates: list[str], first_parent: str, book: BloodBook,
 
 
 # ---------------------------------------------------------------------------
+# R143 -- THE GENE FLOOD (pure law)
+# ---------------------------------------------------------------------------
+def blood_streak(prev_streak: int, herf: float) -> int:
+    """The consecutive one-blood count: rises while H stays over the one-blood
+    threshold, resets to ZERO the moment the blood diversifies.
+
+    A streak is not a mood, it is a measurement carried across generations
+    (and, via the artifact, across runs): the collapse does not restart every
+    dawn, and neither does its cure's escalation.
+    """
+    if herf >= VERDICT_THRESHOLDS["one_blood"]:
+        return int(prev_streak) + 1
+    return 0
+
+
+def flood_wave(streak: int, population: int) -> int:
+    """The founder wave a one-blood streak has earned.
+
+    streak <= 0        -> 0 founders (the blood is not one-blood)
+    streak < FLOOD_STAGNATION -> BRAKE_IMMIGRANTS (the drip: a spice)
+    streak >= FLOOD_STAGNATION -> THE FLOOD: a bounded share of the population
+                                  as fresh founders (never more than
+                                  ``FLOOD_MAX_SHARE`` of it, never fewer than
+                                  the drip).
+    """
+    streak = int(streak)
+    pop = int(population)
+    if streak <= 0 or pop <= 0:
+        return 0
+    if streak < FLOOD_STAGNATION:
+        return BRAKE_IMMIGRANTS
+    return max(BRAKE_IMMIGRANTS,
+               int(math.ceil(FLOOD_MAX_SHARE * float(pop))))
+
+
+def spread_families(n: int, families: list[str], rng) -> list[str]:
+    """The flood's family spread: ``n`` founders spread across the table as
+    evenly as a rotated cycle allows -- no family more than ceil(n/len)
+    founders, every family represented before any repeats.
+
+    The starting offset is drawn at random (the wave's order is not an
+    alphabetical law), but the SPREAD itself is deterministic arithmetic:
+    a wave of one family would be a new monoculture, not a cure.  An empty
+    table returns an empty wave (fail-closed: no invented families).
+    """
+    n = int(n)
+    if n <= 0 or not families:
+        return []
+    table = sorted({str(f) for f in families if str(f).strip()})
+    if not table:
+        return []
+    start = int(rng.integers(len(table))) if len(table) > 1 else 0
+    return [table[(start + i) % len(table)] for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
 # the artifact
 # ---------------------------------------------------------------------------
 def artifact(*, island: str, blood_map: dict[str, frozenset[str]],
              births: list[Birth], book: BloodBook,
-             brake: dict | None = None, ts: float | None = None) -> dict:
+             brake: dict | None = None, brake_streak: int = 0,
+             ts: float | None = None) -> dict:
     """The spoken census: what the guardian reads and the letter may quote."""
     cns = census(blood_map)
     herf = herfindahl(cns)
@@ -295,6 +383,7 @@ def artifact(*, island: str, blood_map: dict[str, frozenset[str]],
         "census_top": [{"founder": f[:12], "share": round(s, 4)}
                        for f, s in top],
         "brake": brake or {},
+        "brake_streak": int(brake_streak),
         "reading": (
             f"il sangue e' {verdict(herf)}: {len(cns)} linee vive su "
             f"{len(blood_map)} corpi (Ne={ne:.1f}, H={herf:.3f}, "

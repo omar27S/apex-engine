@@ -547,7 +547,15 @@ def _voice(report: dict, st: dict, table: dict, *, civilization, thermometer,
                          f"{_g.get('bodies')} corpi, Ne={_g.get('effective_population')}, "
                          f"incesti {_g.get('sibling_matings')}/{_g.get('crossovers')})")
                 _brk = _g.get("brake") or {}
-                if _brk.get("applied"):
+                if _brk.get("flood"):
+                    # R143 -- the wave said aloud: the desert does not heal one
+                    # immigrant at a time, and the letter does not hide the dam
+                    # breaking.
+                    _line += (f" -- L'ONDATA DI SANGUE NUOVO si e' rovesciata "
+                              f"nella generazione: {_brk.get('immigrants')} "
+                              f"fondatori freschi sparsi su tutte le famiglie "
+                              f"(streak {_brk.get('flood_streak')})")
+                elif _brk.get("applied"):
                     _line += (f" -- il freno e' scattato: "
                               f"{_brk.get('sibling_mates_avoided', 0)} accoppiamenti "
                               f"tra fratelli evitati"

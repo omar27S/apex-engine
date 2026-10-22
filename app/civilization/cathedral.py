@@ -40,6 +40,7 @@ __all__ = [
     "record_outcome",
     "column_weights",
     "evaluate_column",
+    "_sky_verdict",
     "columns_from_context",
     "cascade",
     "gate",
@@ -145,6 +146,38 @@ def column_weights(state: dict) -> dict:
 
 # --- THE SEVEN COLUMNS -----------------------------------------------------
 
+def _sky_verdict(reg: str, hunts) -> tuple[bool, str, str]:
+    """THE RELATIVE SKY (R144): one law for the Watchtower and the Cathedral.
+
+    ``hunts`` is the candidate's blood GROUP -- its way of hunting -- or ``None``
+    for a general (family-less) hunt. A SPECIALIST blood (a group the Watchtower's
+    own ``REGIME_AFFINITY`` names) is confirmed only in the skies its blood hunts,
+    so the Cathedral can never confirm what the Watchtower would pause: the meanrev
+    blood now hunts the range that used to refuse EVERYONE, and the trend blood no
+    longer rides a sky it does not hunt. Blood that is unclassified or not a
+    specialist falls to the old directional law -- honest: no invented
+    specialization, no invented refusal. Fail-closed: a ``dead`` sky confirms
+    nobody (nothing hunts a dead market). The import is lazy so this module stays
+    pure at import time (Scar #6).
+    """
+    from app.civilization.regime_watch import REGIME_AFFINITY  # the single law
+    hunts = (str(hunts).strip() if isinstance(hunts, str) else "") or None
+    directional = reg in _SUPPORTIVE_REGIMES
+    if hunts and hunts != "unknown" and any(
+            hunts in groups for groups in REGIME_AFFINITY.values()):
+        hunted = hunts in REGIME_AFFINITY.get(reg, ())
+        return (hunted,
+                f"regime {reg}, il sangue {hunts} "
+                + ("caccia questo cielo" if hunted else "non caccia questo cielo"),
+                f"regime {reg}: " + ("conferma" if hunted
+                                     else f"il sangue {hunts} non caccia questo cielo"))
+    label = (", sangue non classificato" if hunts == "unknown"
+             else (f", sangue {hunts} non specializzato" if hunts else ""))
+    return (directional, f"regime {reg}{label}",
+            f"regime {reg}: " + ("conferma" if directional
+                                 else "non e' un regime da caccia"))
+
+
 def evaluate_column(name: str, evidence: dict) -> dict:
     """Evaluate ONE column from its evidence (honest: unmeasured -> confirmed None).
 
@@ -159,10 +192,9 @@ def evaluate_column(name: str, evidence: dict) -> dict:
             return _col(name, None, False, "regime non misurato",
                         "regime non misurato: nessuna conferma (onesto)")
         reg = str(reg)
-        ok = reg in _SUPPORTIVE_REGIMES
         transition = bool(ev.get("transitioning"))
-        return _col(name, ok, True, f"regime {reg}" + (" (in transizione)" if transition else ""),
-                    f"regime {reg}: " + ("conferma" if ok else "non e' un regime da caccia"))
+        ok, detail, why = _sky_verdict(reg, ev.get("hunts"))
+        return _col(name, ok, True, detail + (" (in transizione)" if transition else ""), why)
     if name == "structure":
         at = ev.get("at_level")
         if at is None:

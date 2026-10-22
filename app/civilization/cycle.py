@@ -830,9 +830,34 @@ def _flow_dragon_awareness(state: dict, *, flow_block: dict, ts: str) -> dict:
         return {"observed": False}
 
 
+# R144 -- THE HONEST TOLERANCE: proximity to a structural level is relative to
+# the pair's own scale (a quarter of the recent ATR). The old absolute 1e-6 was a
+# zero-tolerance mirage: a 112-yen pair was never "at the level", so the structure
+# column could never confirm and the cascade starved one voice closer to silence.
+STRUCTURE_PROXIMITY_ATR: float = 0.25
+
+
+def _feed_the_macro_column(store_state: dict) -> bool:
+    """THE MACRO PIPE (R144): pipe the falcon's raw macro radar into Column 5.
+
+    The radar (DXY, WTI, US10Y, VIX) has been measured live all along; the macro
+    column read ``store_state["macro_readings"]`` -- a key nobody ever wrote. This
+    connects the two: the radar's raw ``{value, prev, ts}`` per instrument becomes
+    the macro evidence the DXY cascade already knows how to read. Honest: an
+    absent radar leaves the column unmeasured (no invented support); the pipe
+    only writes what the eyes actually saw.
+    """
+    raw = (store_state.get("falcon") or {}).get("macro") or {}
+    if not (isinstance(raw, dict) and raw):
+        return False
+    store_state["macro_readings"] = raw
+    return True
+
+
 def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
                        forward_block: dict, ts: str, pair_override: str = "",
-                       direction_override: int | None = None) -> dict:
+                       direction_override: int | None = None,
+                       family_override: str | None = None) -> dict:
     """Assemble the Cathedral's live context from the REAL readings (honest).
 
     Each column reads only what was MEASURED: the falcon's regime flags, the level
@@ -855,8 +880,19 @@ def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
     # COLUMN 1 -- REGIME: the pair's live regime flag (the falcon's kingdom).
     rf = falcon_mod.regime_flag({"pair": pair, **reading}) if pair else {
         "pair": None, "regime": None}
+    # R144 -- THE RELATIVE SKY: the candidate's BLOOD reaches the sky column. The
+    # group map is the realms' own (single source); an unclassified blood stays
+    # honest ("unknown" falls to the old directional law inside the column).
+    hunts: str | None = None
+    if family_override:
+        try:
+            from app.factory.realms import family_group
+            hunts = family_group(str(family_override))
+        except Exception:  # noqa: BLE001 -- blood that cannot be classified hunts as a general
+            hunts = None
     regime_ev = {"regime": rf.get("regime"),
-                 "transitioning": bool((regime_block or {}).get("shifts"))}
+                 "transitioning": bool((regime_block or {}).get("shifts")),
+                 "hunts": hunts}
 
     # COLUMN 2 -- STRUCTURE: price at a structural level (the SMC levels).
     structure_ev = {"at_level": None, "kind": None, "tests": None}
@@ -867,10 +903,22 @@ def _cathedral_context(store_state: dict, *, readings: dict, regime_block: dict,
             ex = fr.exec
             ls = levels_mod.swing_levels(ex["high"].to_numpy(), ex["low"].to_numpy())
             close = ex["close"].to_numpy()
-            near = bool(len(close)) and bool(
-                (np.abs(close - ls.swing_low) <= 1e-6).any()
-                or (np.abs(close - ls.swing_high) <= 1e-6).any())
-            structure_ev = {"at_level": near, "kind": "swing", "tests": None}
+            try:
+                atr_arr = ex["atr"]
+            except (KeyError, TypeError, IndexError):
+                atr_arr = getattr(ex, "atr", None)
+            # R144 -- THE HONEST TOLERANCE: the LAST price against the LAST swing
+            # levels, within a quarter of the pair's own ATR. No scale (no finite
+            # ATR) -> the column stays unmeasured (never a fabricated proximity).
+            last_close = float(close[-1]) if len(close) else None
+            tol = (float(atr_arr[-1]) * STRUCTURE_PROXIMITY_ATR
+                   if atr_arr is not None and len(atr_arr)
+                   and np.isfinite(atr_arr[-1]) else None)
+            if last_close is not None and tol is not None and len(ls.swing_low):
+                near = bool(abs(last_close - float(ls.swing_low[-1])) <= tol
+                            or abs(last_close - float(ls.swing_high[-1])) <= tol)
+                structure_ev = {"at_level": near, "kind": "swing", "tests": None,
+                                "tolerance": tol}
     except Exception:  # noqa: BLE001
         structure_ev = {"at_level": None, "kind": None, "tests": None}
 
@@ -1044,7 +1092,8 @@ def _signal_generator_block(store_state: dict, *, night_report: dict, readings: 
                 store_state, readings=readings, regime_block=regime_block,
                 forward_block=forward_block, ts=ts,
                 pair_override=cand.get("pair") or "",
-                direction_override=cand.get("direction"))
+                direction_override=cand.get("direction"),
+                family_override=cand.get("family"))
             cat = cathedral_mod.cathedral_block(store_state, ctx, ts=ts)
             challenge = red_mod.devil_advocate(store_state, {
                 "gate": cat.get("gate"), "columns": cat.get("columns"),
@@ -1657,6 +1706,9 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     #     fail-open and all honest: an unmeasured axis stays None ("non misurato").
     falcon_block = falcon_mod.falcon_block(store_state, now_epoch=_epoch(ts))
     store_state["falcon_summary"] = falcon_block
+    # R144 -- THE MACRO PIPE: the radar the falcon just reduced feeds Column 5 NOW
+    # (the hunt below reads macro_readings; before R144 the key was never written).
+    _feed_the_macro_column(store_state)
     web_block = webwatch_mod.web_watch_block(store_state, now=ts)
     store_state.setdefault("pipe", {})
     store_state["pipe"]["last_state_ts"] = ts

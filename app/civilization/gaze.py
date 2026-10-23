@@ -526,9 +526,17 @@ def deja_vu(archive: list[dict], signature: dict | None, *,
         if sim > best_sim:
             best, best_sim = e, sim
     if best is not None and best_sim >= floor:
+        # R147 — THE HONEST MEMORY: the legacy archive kept its scenes without a
+        # date, and the reading named an empty day ("l'ultima volta il -- "). A
+        # dateless memory is named dateless, never dressed as a calendar it
+        # never kept; from here on the eyes stamp every scene they archive.
+        when = str(best.get("ts") or "").strip()
+        seen = (f"l'ultima volta il {when}" if when else
+                "gia' vista in un tempo senza data (la memoria piu' vecchia "
+                "non portava il calendario)")
         return {"ts": best.get("ts"), "outcome": best.get("outcome"),
                 "label": best.get("label"), "similarity": best_sim,
-                "reading": (f"questa scena l'ultima volta il {best.get('ts')} — "
+                "reading": (f"questa scena {seen} — "
                             f"si risolse come {best.get('outcome')} "
                             f"(somiglianza {best_sim:.2f})")}
     return None

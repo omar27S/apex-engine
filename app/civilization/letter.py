@@ -28,6 +28,7 @@ from app.civilization import bulletin as bl
 from app.civilization import controllore as ctrl
 from app.civilization import council as cou
 from app.civilization import dragon as dragon_mod
+from app.civilization import mind as mind_mod
 from app.civilization import ticket as ticket_mod
 from app.civilization.sage_presence import (CEO_NOTE_HEADER, DAWN_NOTE_HEADER,
                                             SPONTANEOUS_TAG)
@@ -61,7 +62,11 @@ TABLE_METRICS: tuple[tuple[str, str, str, str], ...] = (
     ("DD ricerca cumulato (R)", "dd_r", "r", "up"),
     ("Fraz. deployabile (8%/DD ric.)", "deployable_pct", "pct", "up"),
     ("Trade distinti/settimana", "volume_worst_week", "num", "up"),
-    ("Distanza legge 5/settimana", "volume_gap", "num", "up"),
+    # R147 — a SIGNED gap has no honest direction: shrinking toward zero is
+    # improvement below the law, and going NEGATIVE means the law is EXCEEDED
+    # (a good thing the old "up" arrow called a decline). The trend claims
+    # nothing; the VOICE says whether the law is met.
+    ("Distanza legge 5/settimana", "volume_gap", "num", "flat"),
     ("Strategie net-positive", "net_positive_strategies", "int", "up"),
     ("Frizione media (x)", "friction_avg", "x", "flat"),
     ("Distanza dal 3x", "friction_gap", "num", "up"),
@@ -76,6 +81,14 @@ TABLE_METRICS: tuple[tuple[str, str, str, str], ...] = (
     ("Distanza obiettivo (90% WR)", "distance_to_goal", "pct", "up"),
     ("E2: lezioni->cambiamenti", "e2_ratio", "ratio", "flat"),
     ("Richieste al CEO", "ceo_requests", "int", "flat"),
+    # R147 — THE HONEST MIRROR (the CEO's map grows two rows at its frozen end;
+    # the existing order is untouched). The Dragon's capital domanda — "contate
+    # R come realizzati o come ipotizzati? la differenza e' tutto" — is answered
+    # EVERY morning in the table itself, and the belief ledger's BIRTHS are
+    # counted beside its reversals (a metric that counts only the overthrown
+    # trains the civilization to agnosticism and calls it rigour).
+    ("R da dispaccio (conto vivo)", "dispatch_r", "r", "up"),
+    ("Nascite credenze (oggi)", "belief_births_today", "int", "up"),
 )
 
 _GOAL_WR = 0.90  # the objective: 90% win rate
@@ -280,6 +293,16 @@ def letter_metrics(report: dict, *, civilization: dict | None = None,
                               "serve il win rate (migliore)"),
         "e2_ratio": M(indep["e2_ratio"], "ratio",
                       "il report non porta l'amendment E2", text=e2_text),
+        # R147 — THE HONEST MIRROR: the crown's two faces and the day's births.
+        # The dispatch R is None until a real order exists (never a flattering
+        # zero); the births count only TODAY's newborn beliefs (no stale fallback).
+        "dispatch_r": M(indep["dispatch_r"], "r",
+                         st.get("_why", {}).get("dispatch_r")
+                         or "nessun ordine mai piazzato (Build Mode): il conto e' "
+                            "carta di finalisti finche' il primo dispaccio non nasce"),
+        "belief_births_today": M(indep["belief_births_today"], "int",
+                                  "nessuna credenza toccata oggi (0 nate, 0 ribaltate: "
+                                  "zero misurato, non zero dimenticato)"),
         # THE CONTINUOUS LIFE (Parts Two-Three): the collective pulse and the
         # engagement read from the cycle's LIFE block (honest: absent -> --).
         "pulse_rate": M(_life_pulse(civ), "num",
@@ -411,6 +434,19 @@ def _voice(report: dict, st: dict, table: dict, *, civilization, thermometer,
                      "non ho ancora un report da raccontare."))
 
     movers = _biggest_movers(table, n=2)
+    # R147 — THE PAPER CROWN NAMED (the Dragon's capital denuncia): the voice
+    # says aloud, every morning, what the crown is made of. The paper account
+    # (the finalists' simulation) is honest research — but a crown it must never
+    # wear again without its name. The first dispatched order opens the live
+    # account; until then the mirror says "carta", not "equity".
+    _paper = st.get("paper_r") if isinstance(st, dict) else None
+    _crown_basis = st.get("crown_basis") if isinstance(st, dict) else None
+    if _crown_basis or _paper is not None:
+        L.append("  Il conto e' carta di finalisti (nessun ordine mai piazzato"
+                 + (f"; base: {_crown_basis}" if _crown_basis else "")
+                 + (f"; {_paper} R di carta accumulati" if _paper is not None else "")
+                 + "): l'R che nasce dal dispaccio vivo e' ancora non misurato — "
+                   "il primo ordine piazzato aprira' il conto vero.")
     # W4 (the false triumph): a deployable fraction measured on a YOUNG pain
     # ledger is measured-zero, not measured-safe (the Dragon's own doctrine:
     # ambition rises only on evidence).  With < 7 nights of the account's memory
@@ -443,8 +479,10 @@ def _voice(report: dict, st: dict, table: dict, *, civilization, thermometer,
                  "(una cosa diversa) e' l'unico segnale che ho.")
     vol = st.get("volume_worst_week")
     if vol is not None:
+        _met = isinstance(vol, (int, float)) and vol >= 5.0
         L.append(f"  Volume: {vol} trade distinti/sett. nella peggior finestra; "
-                 f"la legge ne chiede 5.")
+                 + ("la legge dei 5 e' rispettata."
+                    if _met else "la legge ne chiede 5."))
     L.append("")
 
     # MI SERVE QUALCOSA?
@@ -1331,6 +1369,21 @@ def one_brain_lines(civ: dict | None) -> list[str]:
     # CHI HA CAMBIATO IDEA (the belief ledger).
     bl = ob.get("belief_ledger") or []
     L.append("**Chi ha cambiato idea.**")
+    # R147 — THE BELIEF BIRTHS: the Dragon's denuncia ("aggiungi births_today e
+    # giudica dal rapporto nascita/inversione, non dal volume dei tradimenti") —
+    # the day's newborn convictions are counted beside the overthrown, so a
+    # civilization that only reverses can no longer pose as a rigorous one.
+    # The day is the fold's own cycle_ts (the belief rows carry that same night's
+    # stamp); an absent ts counts nothing (zero measured, not zero forgotten).
+    _bcounts = mind_mod.belief_day_counts(
+        bl, day=str((civ or {}).get("cycle_ts") or "")[:10])
+    if _bcounts["rows_today"]:
+        _bvital = mind_mod.belief_vitality(_bcounts)
+        L.append(f"  Oggi: {_bcounts['births_today']} credenze nate, "
+                 f"{_bcounts['reversals_today']} ribaltate, "
+                 f"{_bcounts['retractions_today']} ritirate."
+                 + (f" Vitalita' (nascite/ribaltamenti): {_bvital}."
+                    if _bvital is not None else ""))
     if bl:
         for b in bl[-3:]:
             L.append(f"  - {b.get('agent')}: {b.get('before')} -> {b.get('after')} "

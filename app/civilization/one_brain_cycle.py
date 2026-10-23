@@ -141,9 +141,19 @@ def _market_model(night_report: dict, *, version: int, ts: str,
     """
     rows = night_report.get("leaderboard") or []
     pairs = sorted({str(r.get("family")) for r in rows if r.get("family")})
-    regimes = {str(r.get("family")): (float(r.get("resilience"))
-               if isinstance(r.get("resilience"), (int, float)) else None)
-               for r in rows if r.get("family")}
+    # R147 — THE RIGHT NAME: resilience (a survival share) once rode in the
+    # `regimes` axis and the whole civilization read it as regime health — the
+    # thermometer lied by label (the Dragon's fourth denuncia). Resilience now
+    # rides under its own name; `regimes` carries ONLY a REAL regime census
+    # (pair -> regime label) when the world measured one (the hawk's live map),
+    # and stays honestly empty otherwise — never a survival score in a regime's
+    # clothes.
+    resilience = {str(r.get("family")): (float(r.get("resilience"))
+                   if isinstance(r.get("resilience"), (int, float)) else None)
+                  for r in rows if r.get("family")}
+    regimes: dict = {}
+    if isinstance(hawk, dict) and isinstance(hawk.get("regimes"), dict):
+        regimes = {str(k): v for k, v in hawk["regimes"].items() if v}
     flows = {str(r.get("family")): (float(r.get("adv_net_r"))
              if isinstance(r.get("adv_net_r"), (int, float)) else None)
              for r in rows if r.get("family")}
@@ -153,7 +163,8 @@ def _market_model(night_report: dict, *, version: int, ts: str,
     if isinstance(futures, dict) and futures.get("reading"):
         sessions["futures_context"] = str(futures.get("reading"))
     m = one_brain.market_model(pairs=pairs, flows=flows, regimes=regimes,
-                               sessions=sessions, version=version, ts=ts)
+                               sessions=sessions, resilience=resilience,
+                               version=version, ts=ts)
     if pairs:
         m["belief"] = (f"il mondo ha {len(pairs)} famiglia/e: "
                        f"{', '.join(pairs)}")
@@ -265,6 +276,10 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
                        | set(career_certified))
     ob["refusals"] = one_brain.reconsider_refusals(ob.get("refusals") or [],
                                                    survivors=survivors, ts=ts)
+    # R147 — THE VETO'S PALACE IS BOUNDED: the refusal memory grew unbounded in
+    # the state (only the RETURNED block was trimmed) — a palace, not a hoard
+    # (the same cure the play queue received, BUG-3b's family).
+    ob["refusals"] = ob["refusals"][-200:]
     packages = _packages(night_report, store_state, ts)
     # THE GAZE feeds the brain (Part Five): the visual context the eyes produced this
     # night rides every package as first-class evidence, and a sighting that several

@@ -303,6 +303,9 @@ def refusal_entry(decision: dict, *, ts: str = "") -> dict:
     return {
         "ts": ts,
         "idea": prop.get("idea") or prop.get("what"),
+        "attention": (float(prop["attention"])
+                       if isinstance(prop.get("attention"), (int, float))
+                       else None),
         "reasons": reasons,
         "field_score": (decision.get("field") or {}).get("score"),
         "vetoed": bool(decision.get("vetoed")),
@@ -377,6 +380,7 @@ def kelly_voice(edge: float | None, *, floor: float = TITANIUM_FLOOR) -> dict:
 
 def market_model(*, pairs: list[str] | None = None, flows: dict | None = None,
                  regimes: dict | None = None, sessions: dict | None = None,
+                 resilience: dict | None = None,
                  version: int = 1, ts: str = "") -> dict:
     """ONE shared, versioned picture of how the market relates (the world model).
 
@@ -384,12 +388,21 @@ def market_model(*, pairs: list[str] | None = None, flows: dict | None = None,
     the sessions. It is the civilization's shared reality — updated nightly,
     questioned by the philosophers, versioned like the certificates. Honest: an axis
     with no measurement is an empty structure, never an invented relationship.
+
+    R147 — THE RIGHT NAME: ``resilience`` (a survival share per family, from the
+    leaderboard's autopsy) once rode inside the ``regimes`` axis, and the whole
+    civilization read a survival score as a regime-health score — the thermometer
+    lied by label (the Dragon's denuncia of 2026-10-23: "quando il classificatore
+    dichiara salute su ciò che muore, il paziente non è la famiglia: è il
+    termometro"). Resilience now rides under its own name; ``regimes`` carries
+    ONLY a real regime census (pair -> regime label) when the world measured one.
     """
     return {
         "version": int(version), "ts": ts,
         "pairs": sorted(str(p) for p in (pairs or [])),
         "flows": {str(k): v for k, v in (flows or {}).items()},
         "regimes": {str(k): v for k, v in (regimes or {}).items()},
+        "resilience": {str(k): v for k, v in (resilience or {}).items()},
         "sessions": {str(k): v for k, v in (sessions or {}).items()},
         "belief": "il modello non ha ancora una lettura del mondo",
     }
@@ -406,7 +419,7 @@ def market_model_changed(old: dict | None, new: dict) -> dict:
         return {"changed": False, "version": new.get("version"),
                 "changes": [], "reading": "primo modello del mondo (nessun confronto)"}
     changes: list[str] = []
-    for axis in ("pairs", "regimes", "sessions", "flows"):
+    for axis in ("pairs", "regimes", "resilience", "sessions", "flows"):
         o, n = old.get(axis) or {}, new.get(axis) or {}
         if isinstance(o, list):
             o = {x: True for x in o}

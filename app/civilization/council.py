@@ -19,6 +19,8 @@ Council is a pure reduction over it. No I/O.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.civilization import ledger as L
 from app.civilization import rotation as rotation_mod
 
@@ -27,6 +29,9 @@ __all__ = [
     "MIN_BURST_TRIALS",
     "MAX_BURST_TRIALS",
     "CURE_FAILURES",
+    "CURE_COURSE",
+    "REFUSAL_COOLDOWN_HOURS",
+    "REFUSAL_REOPEN_ATTENTION",
     "EMPTY_REALM_COVERAGE",
     "CEO_DIRECTIVES",
     "granted_realms",
@@ -44,8 +49,35 @@ MAX_BURST_TRIALS: int = 20000          # a conviction, bounded by the Guardian
 # A family with at least this many adversary-tested failures and no survivor is
 # "sick" — the Council chooses to cure it (research focus), by evidence.
 CURE_FAILURES: int = 3
+# R147 — THE CURE'S COURSE (the Dragon's third denuncia): a cure that never
+# changes when the patient changes, repeated forever, is not research — it is
+# ostinazione con la contabilita' in ordine. A family gets at most CURE_COURSE
+# cure attempts; after the course is exhausted with no survivor, the E4 verdict
+# takes the seat (retire the weak by data, a king-child in light mutation fills it).
+CURE_COURSE: int = 2
+# R147 — THE HONORED VETO (the Sage's warning): a refusal by the One Brain is
+# E9 WORKING — a measurement of the field, not an obstacle to force. An idea the
+# field refused is NOT re-forged into the same burst for this long; only NEW
+# evidence (the attention grew by at least this much since the refusal) or a
+# veto proven wrong (was_right is False) reopens the question.
+REFUSAL_COOLDOWN_HOURS: float = 48.0
+REFUSAL_REOPEN_ATTENTION: float = 1.0
 # A realm whose measured coverage is below this is "empty" — populate it.
 EMPTY_REALM_COVERAGE: float = 0.15
+
+
+def _epoch(ts: str) -> float:
+    """Unix epoch seconds from an ISO timestamp (0.0 when unparseable, honest)."""
+    v = str(ts or "").strip().replace("Z", "+00:00")
+    if not v:
+        return 0.0
+    try:
+        d = datetime.fromisoformat(v)
+    except ValueError:
+        return 0.0
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.timestamp()
 
 
 def burst_size(attention: float, *, capacity_trials: int | None = None) -> int:
@@ -69,18 +101,48 @@ def burst_size(attention: float, *, capacity_trials: int | None = None) -> int:
 
 
 def _cure_decisions(world: dict) -> list[dict]:
+    """Cure the sick — with a COURSE, then retire them (E4). R147.
+
+    The wound (the Dragon's dissent, the Sage's synthesize): the cure decision
+    repeated identically every cycle, changing nothing, curing nothing — a
+    rename of the patient, not a treatment. Now: each cure carries its course
+    number and names the deadline (the WHY changes with the patient), and when
+    the course is exhausted with no survivor the family is RETIRED by data —
+    the E4 verdict, a big call the Dragon will weigh.
+    """
     out: list[dict] = []
+    cures = world.get("family_cures") or {}
     for family, h in sorted((world.get("family_health") or {}).items()):
         fails = int(h.get("failures", 0))
         survivors = int(h.get("survivors", 0))
-        if fails >= CURE_FAILURES and survivors == 0:
+        if not (fails >= CURE_FAILURES and survivors == 0):
+            continue
+        n = int(cures.get(family) or 0)
+        if n < CURE_COURSE:
             out.append(L.decision_entry(
                 kind="cure_family",
                 what=f"cure the family {family}",
                 why=(f"{fails} adversary-tested failures and no certified survivor — "
-                     f"the family is sick by data, not by mood"),
-                evidence=f"failures={fails}, survivors={survivors}",
-                expected_effect="targeted research turns a dead family into evidence"))
+                     f"cure {n + 1} of {CURE_COURSE} for this family: the treatment "
+                     f"changes with the patient, and a course that ends without a "
+                     f"survivor retires the family (E4), it never restarts"),
+                evidence=f"failures={fails}, survivors={survivors}, course={n + 1}/{CURE_COURSE}",
+                expected_effect="a targeted treatment burst measures whether this "
+                                "family can still produce a survivor",
+                extra={"family": family, "course": n + 1, "trials": MIN_BURST_TRIALS}))
+        else:
+            out.append(L.decision_entry(
+                kind="retire_family",
+                what=f"retire the family {family}",
+                why=(f"{fails} adversary-tested failures, 0 survivors and a full "
+                     f"course of {n} cure(s) that changed nothing — E4: retire the "
+                     f"weak by data and give the seat to a king-child in light "
+                     f"mutation; reanimating a certified death is not research, it "
+                     f"is the {fails + 1}st defeat disguised as hope"),
+                evidence=f"failures={fails}, survivors={survivors}, cures_tried={n}",
+                expected_effect="the freed seat goes to a child of the King (light "
+                                "mutation) — the dead become evidence, not a patient",
+                extra={"family": family, "cures_tried": n, "e4": True}))
     return out
 
 
@@ -99,16 +161,48 @@ def _populate_decisions(world: dict) -> list[dict]:
     return out
 
 
-def _burst_decisions(world: dict) -> list[dict]:
+def _burst_decisions(world: dict, *, ts: str = "") -> list[dict]:
+    """Forge the funded ideas — honoring the One Brain's refusals. R147.
+
+    The theater the Sage named ("un burst forgiato senza seed e' un timer
+    travestito da convinzione"): the same refused idea re-forged every cycle
+    while the One Brain keeps refusing it burns attention on a loop. An idea the
+    field refused within REFUSAL_COOLDOWN_HOURS is NOT re-forged: the refusal is
+    honored and recorded (E9 read as measurement). Only new evidence reopens
+    the question — the attention grew by at least REFUSAL_REOPEN_ATTENTION since
+    the refusal, or the veto was proven wrong (was_right is False).
+    """
     out: list[dict] = []
     cap = world.get("capacity_trials")
     dispatch_ts = str(world.get("ts") or "")
+    now = _epoch(ts)
     for idea in world.get("funded_ideas") or []:
         attention = float(idea.get("attention", 0.0))
+        text = str(idea.get("idea") or "")
+        refusal = _recent_refusal(world.get("refused_ideas") or [], idea=text,
+                                  now=now, attention=attention)
+        if refusal is not None:
+            out.append(L.decision_entry(
+                kind="honor_refusal",
+                what=f"honor the refusal of: {text}",
+                why=(f"the integrated field refused this idea (field score "
+                     f"{refusal.get('field_score')}) within the cooldown of "
+                     f"{REFUSAL_COOLDOWN_HOURS:.0f}h and the attention has not grown "
+                     f"since — E9: the refusal is a measurement of the field, not an "
+                     f"obstacle to force; the Council does not re-forge what the "
+                     f"field already refused"),
+                evidence=(f"refused_ts={refusal.get('ts')}, "
+                          f"field_score={refusal.get('field_score')}, "
+                          f"attention_then={refusal.get('attention')}, "
+                          f"attention_now={round(attention, 4)}"),
+                expected_effect="the saved burst is spent where the field can still "
+                                "say yes; the refusal's memory keeps learning",
+                extra={"idea": text, "refused_ts": refusal.get("ts")}))
+            continue
         size = burst_size(attention, capacity_trials=cap)
         # FIX 1 — the burst's seed ROTATES with the dispatch timestamp and the idea,
         # so two bursts in the same hour (or across nights) are distinct draws.
-        seed = (rotation_mod.burst_seed(idea=str(idea.get("idea")), dispatch_ts=dispatch_ts)
+        seed = (rotation_mod.burst_seed(idea=text, dispatch_ts=dispatch_ts)
                 if dispatch_ts else None)
         out.append(L.decision_entry(
             kind="forge_burst",
@@ -123,6 +217,38 @@ def _burst_decisions(world: dict) -> list[dict]:
             extra={"burst_trials": size, "idea": idea.get("idea"),
                    "attention": round(attention, 6), "burst_seed": seed}))
     return out
+
+
+def _recent_refusal(refused: list[dict], *, idea: str, now: float,
+                    attention: float) -> dict | None:
+    """The refusal that still binds this idea, if any (the most recent one).
+
+    A refusal binds when its veto was not proven wrong AND it is within the
+    cooldown AND the attention has not grown by the reopen margin since. An
+    unparseable or absent ts is treated as BINDING (fail-closed against the
+    theater: the benefit of the doubt goes to the veto, never to the loop).
+    """
+    text = str(idea or "")
+    best: dict | None = None
+    for r in refused or []:
+        if str(r.get("idea") or "") != text:
+            continue
+        if best is None or str(r.get("ts") or "") >= str(best.get("ts") or ""):
+            best = r
+    if best is None:
+        return None
+    if best.get("was_right") is False:
+        return None          # the veto was proven wrong — the door reopens
+    ts_epoch = _epoch(str(best.get("ts") or ""))
+    if ts_epoch > 0.0 and now > 0.0:
+        age_h = (now - ts_epoch) / 3600.0
+        if age_h > REFUSAL_COOLDOWN_HOURS:
+            return None      # the cooldown expired — the question may be asked again
+    att_then = best.get("attention")
+    if (isinstance(att_then, (int, float))
+            and (float(attention) - float(att_then)) >= REFUSAL_REOPEN_ATTENTION):
+        return None          # new evidence: the attention grew since the refusal
+    return best
 
 
 def _focus_decisions(world: dict) -> list[dict]:
@@ -225,7 +351,7 @@ def deliberate(world: dict) -> list[dict]:
     decisions += _populate_decisions(world)
     decisions += _focus_decisions(world)
     decisions += _meta_decisions(world)
-    decisions += _burst_decisions(world)
+    decisions += _burst_decisions(world, ts=str(world.get("ts") or ""))
     return decisions
 
 

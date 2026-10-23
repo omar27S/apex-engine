@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from app.civilization import network, sage as sage_mod
+from app.civilization import mind, network, sage as sage_mod
 
 __all__ = [
     "SPONTANEOUS_TAG",
@@ -134,9 +134,16 @@ def living_feed(state: dict, *, ts: str = "") -> dict:
     day = _day(ts)
 
     # the belief ledger LIVE: what changed TODAY, not the whole history.
+    # R147 — THE HONEST MIRROR: a BIRTH (before='(none)') is not a reversal, a
+    # RETRACTION (after='(retracted)') is its own act, and an empty day is ZERO,
+    # never the whole history posing as today (the Dragon's denuncia: a metric
+    # that counts only the overthrown trains the civilization to agnosticism).
     today_belief = [b for b in belief if str(b.get("ts") or "").startswith(day)]
-    reversals = [b for b in (today_belief or belief)
-                 if b.get("before") is not None and b.get("after") is not None]
+    counts = mind.belief_day_counts(belief, day=day)
+    vitality = mind.belief_vitality(counts)
+    reversals = [b for b in today_belief
+                 if str(b.get("before")) != "(none)"
+                 and str(b.get("after")) != "(retracted)"]
 
     # the queue's rhythm: the open items, by lane, and the idle minds.
     lanes: dict[str, int] = {}
@@ -160,12 +167,18 @@ def living_feed(state: dict, *, ts: str = "") -> dict:
         },
         "belief": {
             "n": len(belief),
-            "today": len(today_belief),
-            "reversals_today": len(reversals),
-            "recent": reversals[-8:],
-            "reading": (f"{len(today_belief)} credenze toccate oggi, "
-                        f"{len(reversals)} ribaltate"
-                        if today_belief else "nessuna credenza toccata oggi"),
+            "today": counts["rows_today"],
+            "births_today": counts["births_today"],
+            "reversals_today": counts["reversals_today"],
+            "retractions_today": counts["retractions_today"],
+            "vitality": vitality,
+            "recent": (today_belief or belief)[-8:],
+            "reading": (f"{counts['rows_today']} credenze toccate oggi: "
+                        f"{counts['births_today']} nate, "
+                        f"{counts['reversals_today']} ribaltate, "
+                        f"{counts['retractions_today']} ritirate"
+                        + (f" (vitalita' {vitality})" if vitality is not None else "")
+                        if counts["rows_today"] else "nessuna credenza toccata oggi"),
         },
         "queue": {
             "n": len(queue),
@@ -269,10 +282,20 @@ def watch_alerts(feed: dict) -> list[dict]:
     feed = feed or {}
     belief = feed.get("belief") or {}
     reversals = belief.get("reversals_today")
-    if reversals and reversals >= 3:
+    births = belief.get("births_today")
+    if isinstance(reversals, int) and reversals >= 3 and not births:
+        # R147 — the Dragon's agnosticism denuncia made structural: a mind that
+        # overthrows without birthing is being PAID by the old metric. The alert
+        # names the wound the births metric now measures.
         out.append({"kind": "warn", "structural": True,
-                    "text": (f"{reversals} credenze ribaltate oggi: la mente "
-                             "rivede molto -- verificare che non sia caos")})
+                    "text": (f"{reversals} credenze ribaltate oggi e {births or 0} "
+                              "nate: la mente rivede senza generare — il metro "
+                              "premia l'agnosticismo (vedi la denuncia del Drago)")})
+    elif isinstance(reversals, int) and reversals >= 3:
+        out.append({"kind": "warn", "structural": True,
+                    "text": (f"{reversals} credenze ribaltate oggi (con {births} "
+                              "nascite): la mente rivede molto -- verificare "
+                              "che non sia caos")})
     q = feed.get("queue") or {}
     if (q.get("n") or 0) > 0 and (q.get("activity_today") or 0) == 0:
         out.append({"kind": "warn", "structural": True,

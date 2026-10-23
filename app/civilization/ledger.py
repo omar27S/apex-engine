@@ -23,7 +23,9 @@ __all__ = [
 ]
 
 DECISION_KINDS: tuple[str, ...] = (
-    "cure_family",     # a family is sick — cure it
+    "cure_family",     # a family is sick — cure it (R147: with a COURSE, then retire)
+    "retire_family",   # R147 — E4: the cure course is spent, the family retires by data
+    "honor_refusal",   # R147 — the One Brain refused: the Council honors the veto (E9)
     "populate_realm",  # a realm is empty — populate it
     "forge_burst",     # an idea is promising — FORGE IT (a burst)
     "focus_research",  # strong in X, weak in Y — focus research

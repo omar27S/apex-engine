@@ -328,7 +328,12 @@ def _speak_in_tongue(state: dict, *, session: dict, cmap: dict, ts: str) -> list
     for d in session.get("decisions") or []:
         kind = d.get("kind")
         word = {"cure_family": "cure", "populate_realm": "raid",
-                "forge_burst": "seed", "focus_research": "nov"}.get(kind)
+                "forge_burst": "seed", "focus_research": "nov",
+                # R147 — an E4 retirement is a clean death with the autopsy in
+                # hand: the family's own vocabulary word ("kll") speaks it. The
+                # honored refusal stays silent: it changes no work (the silence
+                # IS the honoring — a quiet cycle says nothing).
+                "retire_family": "kll"}.get(kind)
         danger = False
         channel = tongue.classify(changes_work=True, danger=danger, useful_to="*")
         if word is None or channel == tongue.SILENCE:
@@ -430,12 +435,56 @@ def world_from(night_report: dict, powerups: dict, state: dict,
     return {
         "realm_coverage": cov,
         "family_health": _family_health(night_report),
+        # R147 — THE HONEST MIRROR: the Council deliberates WITH its own memory —
+        # how many cures each family already received (the course, E4's judge)
+        # and which ideas the One Brain's field already refused (the honored veto).
+        "family_cures": _family_cures(state.get("ledger") or []),
+        "refused_ideas": _refused_ideas(state),
         "funded_ideas": funded,
         "strengths_weaknesses": strengths_weaknesses,
         "meta_learning": (powerups.get("meta_learning") if powerups else None) or {},
         "capacity_trials": capacity_trials,
         "had_self_model": bool(prior_model),
     }
+
+
+def _family_cures(ledger: list[dict]) -> dict[str, int]:
+    """R147 — THE CURE'S MEMORY: how many times each family has already been cured.
+
+    Counted from the SEALED record itself (the state ledger's cure_family rows),
+    so the course needs no new state: the minutes are the memory. A cure is
+    counted by kind AND the family named in the decision's own extra field (the
+    structural key the R147 cure writes; the legacy text form is the fallback).
+    """
+    out: dict[str, int] = {}
+    for e in ledger or []:
+        if str(e.get("kind") or "") != "cure_family":
+            continue
+        fam = (e.get("family") if isinstance(e.get("family"), str) and e.get("family")
+               else None)
+        if fam is None:
+            what = str(e.get("what") or "")
+            prefix = "cure the family "
+            fam = what[len(prefix):] if what.startswith(prefix) else None
+        if fam:
+            out[fam] = out.get(fam, 0) + 1
+    return out
+
+
+def _refused_ideas(state: dict) -> list[dict]:
+    """R147 — THE VETO THE COUNCIL READS: the One Brain's refusal memory.
+
+    The refusals the field recorded (idea, ts, field score, attention, and the
+    veto's own verdict when the world answered). The Council honours them
+    instead of re-forging the same refused burst (E9: a refusal is a measure of
+    the field, not a bug to force through).
+    """
+    ob = (state or {}).get("one_brain") or {}
+    return [{"idea": r.get("idea"), "ts": r.get("ts"),
+             "field_score": r.get("field_score"), "attention": r.get("attention"),
+             "was_right": r.get("was_right")}
+            for r in (ob.get("refusals") or [])[-60:]
+            if r.get("idea")]
 
 
 def _seed_ideas(state: dict, *, curiosity_map: dict, self_model: dict) -> None:
@@ -2128,6 +2177,11 @@ def _gaze(state: dict, *, night_report: dict, agents: list[str], ts: str,
     a missing tape renders blind, a refused page is reported, an unmeasured heat
     map cell stays neutral. The eyes inform; they never trade.
     """
+    # R147 — THE DATED EYES: the archive held 19 scenes and not one carried a
+    # date (the caller passed no clock, so the deja-vu read "l'ultima volta il
+    # -- "). The eyes see NOW when no clock is given: every scene archived from
+    # here on carries the day it was seen.
+    ts = ts or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     g = state.setdefault("gaze", {"monitors": [], "visual_library": [], "archive": [],
                                   "flow": [], "intuitions": [], "patrols": [],
                                   "deja_vu": [], "sightings": []})

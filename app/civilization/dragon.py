@@ -533,7 +533,10 @@ def research_director_cycle(state: dict, *, backend=None, ts: str = "",
 # final vote: coronations, retirements of kings, family executions, strategic pivots.
 BIG_CALL_KINDS: tuple[str, ...] = (
     "coronate", "coronation", "retire_king", "retire", "execute_family",
-    "execute", "cure_family", "populate_realm", "pivot", "burst")
+    "execute", "cure_family", "populate_realm", "pivot", "burst",
+    # R147 — the E4 retirement of a spent family is a big call: the Dragon
+    # weighs it with everything it has (its own dissent demanded exactly this).
+    "retire_family")
 
 
 def big_calls(decisions: list[dict]) -> list[dict]:

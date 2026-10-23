@@ -185,10 +185,14 @@ def enqueue(queue: list[dict], item: dict) -> dict:
 def from_council(decisions: list[dict], *, ts: str = "") -> list[dict]:
     """Turn the Council's decisions into queued work (bursts as inspiration).
 
-    A ``forge_burst`` decision becomes a burst job sized by the Council; the other
-    decision kinds are captured by the Council's own ledger and do not enqueue work
-    here (they change the world, not the queue). A MARKET-funded idea takes the
-    separate ``fuel_pump`` path (top priority), so this one keeps its Council origin.
+    A ``forge_burst`` decision becomes a burst job sized by the Council; a
+    ``cure_family`` decision becomes its TREATMENT (R147: a targeted burst on the
+    sick family's own space — the cure was once a ledger line that changed
+    nothing, ceremony without treatment; now every cure buys the family a real,
+    bounded look, and the course counts these receipts). The other decision kinds
+    are captured by the Council's own ledger and do not enqueue work here (they
+    change the world, not the queue). A MARKET-funded idea takes the separate
+    ``fuel_pump`` path (top priority), so this one keeps its Council origin.
     """
     out: list[dict] = []
     for d in decisions or []:
@@ -199,6 +203,19 @@ def from_council(decisions: list[dict], *, ts: str = "") -> list[dict]:
                 why=d.get("why", "the Council decided"), weight=-1,
                 source="council", ts=ts,
                 extra={"trials": trials, "idea": d.get("idea")}))
+        elif d.get("kind") == "cure_family":
+            # R147 — the treatment burst: a cure that never touches the queue
+            # cured nothing. Bounded (the hunch's look, 200 trials) and deduped
+            # by the daemon's whole-item check while it stays pending.
+            out.append(work_item(
+                "council_burst",
+                what=f"treatment for the family {d.get('family', '?')}",
+                why=str(d.get("why") or "the Council decided"),
+                weight=-1, source="council", ts=ts,
+                extra={"trials": int(d.get("trials") or 200),
+                       "idea": f"treatment for the family {d.get('family', '?')}",
+                       "family": d.get("family"), "course": d.get("course"),
+                       "treatment": True}))
     return out
 
 

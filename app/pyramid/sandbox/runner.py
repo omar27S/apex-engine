@@ -48,6 +48,28 @@ NOT enforced (stated plainly, so nobody mistakes the cage for a VM):
   * ``RLIMIT_AS`` is a virtual-address cap; a body can still hold one big array
     under it. It bounds runaway allocation, it is not a precise RSS meter.
 
+THE HONEST CLOCK (R148)
+-----------------------
+A wall-clock death used to be one undifferentiated ``sandbox_death``. But the
+wall clock measures the MACHINE's mood as much as the body's work: a body that
+needed two seconds of cpu and got a tenth of it under a loaded machine dies at
+the wall having done nothing wrong -- and the old cage called that a death of
+the body. The honest clock reads the child's OWN cpu seconds (user+sys, all
+its threads) from ``/proc/<pid>/stat`` in the instant before the kill, and
+splits the wall death by whose fault it was:
+
+  * cpu < 60% of wall  -> ``sandbox_starved``      (the machine starved the body)
+  * cpu >= 60% of wall -> ``sandbox_slow``         (the body held the machine and
+                                                   was still too slow)
+  * SIGXCPU            -> ``sandbox_cpu_budget``   (RLIMIT_CPU: the body burned
+                                                   its computation budget)
+
+The 60% line splits two worlds that are far apart at rest (a cpu-bound body
+runs >=95%, a starved one collapses toward 0) with margin on both sides. The
+judge (not the cage) owns the policy: a starved run is retried with a doubled
+wall before any verdict is spoken. Violations and crashes keep the honest
+``sandbox_death`` they always had.
+
 Pure at import: no side effects, no I/O. The only I/O is inside ``run_body``.
 """
 
@@ -56,6 +78,7 @@ from __future__ import annotations
 import json
 import os
 import resource
+import signal
 import subprocess
 import sys
 import tempfile
@@ -67,11 +90,17 @@ import pandas as pd
 
 from app.pyramid.sandbox import protocol as proto
 
-__all__ = ["SandboxConfig", "SandboxDeath", "BodyRun", "run_body"]
+__all__ = ["SandboxConfig", "SandboxDeath", "BodyRun", "run_body",
+           "CAUSE_SANDBOX_DEATH", "CAUSE_PROTOCOL", "CAUSE_STARVED",
+           "CAUSE_SLOW", "CAUSE_CPU_BUDGET"]
 
 # Causes sealed for the cage (R30 + protocol). Never re-declared elsewhere.
 CAUSE_SANDBOX_DEATH = "sandbox_death"
 CAUSE_PROTOCOL = "protocol_violation"
+# THE HONEST CLOCK (R148): a wall-clock death is split by the body's OWN cpu.
+CAUSE_STARVED = "sandbox_starved"        # the wall fired while the body barely held the cpu -- the machine's mood, never the body's sin
+CAUSE_SLOW = "sandbox_slow"              # the wall fired while the body HELD the machine -- its own slowness
+CAUSE_CPU_BUDGET = "sandbox_cpu_budget"  # the kernel's RLIMIT_CPU fired -- the body burned its computation budget
 
 _VIOLATION_SENTINEL = "APEX_SANDBOX_VIOLATION:"
 # Substrings identifying secret-bearing paths a body must never read.
@@ -230,6 +259,49 @@ def _child_env(tmp: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# THE HONEST CLOCK (R148): the body's own cpu, read from /proc at the kill.
+# ---------------------------------------------------------------------------
+# A cpu-bound body at rest holds >=95% of its wall; a starved body collapses
+# toward 0. The 60% line splits the two worlds with margin on both sides.
+_STARVATION_CPU_FRACTION = 0.6
+
+try:
+    _CLK_TCK = float(os.sysconf("SC_CLK_TCK"))
+except (ValueError, OSError, AttributeError):  # pragma: no cover - Linux box
+    _CLK_TCK = 100.0
+
+
+def _proc_cpu_seconds(pid: int) -> float:
+    """The process's OWN cpu seconds (user+sys across all its threads).
+
+    Reads /proc/<pid>/stat on this Linux platform (the cage's stated platform).
+    On a pathological miss (pid gone, unreadable line) it returns 0.0: a blind
+    clock must never manufacture evidence -- and it reads as starvation (the
+    cautious verdict is a retry, never a rushed execution).
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            data = f.read().decode("utf-8", "replace")
+        rest = data[data.rindex(")") + 1:].split()
+        utime, stime = int(rest[11]), int(rest[12])  # fields 14/15 after "pid (comm)"
+        return (utime + stime) / _CLK_TCK
+    except Exception:
+        return 0.0
+
+
+def _classify_wall_death(cpu_seconds: float, wall_seconds: float) -> tuple[str, str]:
+    """Split a wall-clock death by whose fault it was -- the honest clock."""
+    ratio = (cpu_seconds / wall_seconds) if wall_seconds > 0 else 1.0
+    if ratio < _STARVATION_CPU_FRACTION:
+        return (CAUSE_STARVED,
+                f"wall {wall_seconds:.1f}s, cpu {cpu_seconds:.2f}s "
+                f"({ratio:.0%}) -- the machine starved the body, not the body's sin")
+    return (CAUSE_SLOW,
+            f"wall {wall_seconds:.1f}s, cpu {cpu_seconds:.2f}s "
+            f"({ratio:.0%}) -- the body held the machine and was still too slow")
+
+
 def run_body(
     body_source: str,
     input_frame,
@@ -267,19 +339,37 @@ def run_body(
             except (ValueError, OSError):
                 pass
 
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(tmp, "_entry.py")],
+            cwd=tmp, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, preexec_fn=_limits,
+        )
         try:
-            proc = subprocess.run(
-                [sys.executable, os.path.join(tmp, "_entry.py")],
-                cwd=tmp, env=env, capture_output=True, text=True,
-                timeout=config.timeout, preexec_fn=_limits,
-            )
+            stdout_b, stderr_b = proc.communicate(timeout=config.timeout)
         except subprocess.TimeoutExpired:
-            raise SandboxDeath(CAUSE_SANDBOX_DEATH, f"timeout after {config.timeout}s")
+            # THE HONEST CLOCK (R148): the wall fired. In the instant before the
+            # kill, read the body's OWN cpu from /proc -- the wall measures the
+            # machine's mood, the cpu measures the body's work. The death is
+            # named by whose fault it was, never lumped into one cause.
+            cpu_seconds = _proc_cpu_seconds(proc.pid)
+            proc.kill()
+            try:
+                proc.communicate(timeout=10)
+            except Exception:  # best-effort drain; the writer is dead
+                pass
+            cause, detail = _classify_wall_death(cpu_seconds, float(config.timeout))
+            raise SandboxDeath(cause, detail)
 
-        stderr = proc.stderr or ""
+        stderr = stderr_b or ""
         violation = _first_violation(stderr)
         if violation is not None:
             raise SandboxDeath(CAUSE_SANDBOX_DEATH, violation)
+        if proc.returncode == -signal.SIGXCPU:
+            # THE HONEST CLOCK: the kernel's cpu rlimit fired -- the body burned
+            # its computation budget. An honest death, named for what it was.
+            raise SandboxDeath(
+                CAUSE_CPU_BUDGET,
+                f"burned its computation budget (RLIMIT_CPU {int(config.timeout) + 2}s)")
         if proc.returncode != 0:
             tail = (stderr.strip().splitlines() or [""])[-1]
             raise SandboxDeath(CAUSE_SANDBOX_DEATH,
@@ -297,7 +387,7 @@ def run_body(
         return BodyRun(
             long=np.asarray(long_out, dtype=bool),
             short=np.asarray(short_out, dtype=bool),
-            meta=meta, output_json=raw, stdout=proc.stdout or "",
+            meta=meta, output_json=raw, stdout=stdout_b or "",
             stderr=stderr, temp_dir=tmp, artifacts=_collect_artifacts(tmp),
         )
     finally:

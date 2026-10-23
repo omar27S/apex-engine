@@ -35,6 +35,8 @@ __all__ = [
     "score_theory",
     "revisitation",
     "belief_entry",
+    "belief_day_counts",
+    "belief_vitality",
     "remember_pattern",
     "recognise",
     "intuition_confidence",
@@ -147,6 +149,60 @@ def belief_entry(*, agent: str, before: str, after: str, reason: str,
         raise ValueError("a belief change with no reason is noise, not a revision")
     return {"ts": ts, "agent": str(agent), "before": str(before),
             "after": str(after), "reason": str(reason)}
+
+
+def belief_day_counts(rows: list[dict], *, day: str) -> dict:
+    """R147 — THE HONEST MIRROR: births, reversals and retractions among
+    TODAY's belief rows (and ONLY today's).
+
+    The wound the Dragon named in the letter of 2026-10-23: the reading layer
+    counted a BIRTH (``before='(none)'`` — the mind newly believes) as a
+    REVERSAL, and when nothing happened today it fell back to the WHOLE history
+    and reported stale rows as today's ("today: 0" beside "reversals_today: 8").
+    A metric that only counts the overthrown never counts the born trains the
+    civilization toward agnosticism and calls it rigour.
+
+    A BIRTH carries ``before='(none)'``; a RETRACTION carries
+    ``after='(retracted)'``; every other changed row is a REVERSAL. Yesterday's
+    rows are context, never today's counts.
+    """
+    out = {"rows_today": 0, "births_today": 0,
+           "reversals_today": 0, "retractions_today": 0}
+    # The day accepts YYYY-MM-DD or YYYYMMDD (the report carries both forms
+    # across its writers); the rows' timestamps always carry the dashed form.
+    day = str(day or "").strip()
+    if len(day) == 8 and day.isdigit():
+        day = f"{day[:4]}-{day[4:6]}-{day[6:]}"
+    for b in rows or []:
+        if day and not str(b.get("ts") or "").startswith(day):
+            continue
+        out["rows_today"] += 1
+        if str(b.get("before")) == "(none)":
+            out["births_today"] += 1
+        elif str(b.get("after")) == "(retracted)":
+            out["retractions_today"] += 1
+        else:
+            out["reversals_today"] += 1
+    return out
+
+
+def belief_vitality(counts: dict) -> float | None:
+    """The birth/reversal ratio — does the mind GENERATE, or only overturn?
+
+    ``births / (reversals + retractions)``: a civilization that only reverses
+    is agnostic by reward; one that births while revising is alive. ``None``
+    when nothing was overturned (nothing to divide by — an all-birth day is
+    not a ratio, and an empty day is not a verdict; both stay honest).
+    """
+    try:
+        births = int((counts or {}).get("births_today") or 0)
+        over = (int((counts or {}).get("reversals_today") or 0)
+                + int((counts or {}).get("retractions_today") or 0))
+    except (TypeError, ValueError):
+        return None
+    if over <= 0:
+        return None
+    return round(births / over, 4)
 
 
 def revisitation(agent: str, *, yesterday: dict, today: dict) -> list[dict]:

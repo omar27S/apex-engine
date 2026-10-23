@@ -257,10 +257,28 @@ def stress_test(portfolio: list[dict], *, reading: dict | None = None,
     row = {"ts": str(ts), "n_strategies": len(portfolio or []),
            "scenarios": scenarios, "observed": observed, "alarm": alarm,
            "present": present_scenarios(reading or {}, events=events, now_ts=ts),
-           "reading": (alarm["reading"] if alarm else
-                       f"stress-test: nessuno scenario oltre la soglia "
-                       f"({max_damage_pct:.2%})")}
+           "reading": _honest_overall_reading(alarm, scenarios, max_damage_pct)}
     return row
+
+
+def _honest_overall_reading(alarm: dict | None, scenarios: list[dict],
+                            max_damage_pct: float) -> str:
+    """R147 — THE UNMEASURABLE IS NOT A PROMISE: the overall reading used to
+    cry "nessuno scenario oltre la soglia" while every scenario confessed
+    "danno non misurato (nessuna strategia valutabile)" -- a clean bill of
+    health printed over an unmeasured body. Zero measured is not zero safe
+    (the Letter's own doctrine): when nothing was measurable the reading says
+    so; when some were measured and none breached, only those vouch.
+    """
+    if alarm:
+        return str(alarm["reading"])
+    measured = [s for s in (scenarios or [])
+                if isinstance(s.get("damage_pct"), (int, float))]
+    if not measured:
+        return ("stress-test: non misurabile (nessuna strategia valutabile) -- "
+                "zero misurato non e' zero sicuro")
+    return (f"stress-test: nessuno scenario oltre la soglia "
+            f"({max_damage_pct:.2%}) su {len(measured)} misurati")
 
 
 def portfolio_from_leaderboard(leaderboard: list[dict], *,

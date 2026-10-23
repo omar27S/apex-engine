@@ -16,6 +16,7 @@ caller hands it; it touches no disk and no clock.
 from __future__ import annotations
 
 from app.civilization import bulletin as bl
+from app.civilization import mind
 
 __all__ = ["independent_metrics", "verify", "signature_line", "apply_corrections"]
 
@@ -61,6 +62,18 @@ def independent_metrics(report: dict, *, civilization: dict, body: dict,
 
     kings = _num(st.get("kings")) or (2 if r else None)
 
+    # R147 — THE HONEST MIRROR: the controllore re-derives the crown's two faces
+    # through its own path. The dispatch-basis R comes from the report's crown
+    # block (None while no order was ever placed — never a flattering zero); the
+    # belief births come from the civilization's own ledger, counted by the same
+    # pure reduction the living feed uses (births are not reversals).
+    crown = r.get("measured_dd") or {}
+    crown = crown.get("crown") if isinstance(crown.get("crown"), dict) else {}
+    _ob = (civilization or {}).get("one_brain") or {}
+    _day = str(r.get("date") or "")[:10]
+    _bcounts = mind.belief_day_counts(list(_ob.get("belief_ledger") or []),
+                                      day=_day)
+
     return {
         "wr_best": _num(st.get("wr_best")),
         "wr_portfolio": _num(st.get("wr_portfolio")),
@@ -82,6 +95,8 @@ def independent_metrics(report: dict, *, civilization: dict, body: dict,
         "util_pct": _num((body or {}).get("util_pct")),
         "thermometer": _num((thermometer or {}).get("index")),
         "e2_ratio": e2_ratio,
+        "dispatch_r": _num(crown.get("realized_from_dispatch_r")),
+        "belief_births_today": _bcounts["births_today"],
         # population trio (text form, reconciled separately)
         "_population_trio": (f"{int(alive)}/{int(retired)}/{int(born)}"
                              if None not in (alive, retired, born) else None),

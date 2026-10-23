@@ -5,10 +5,16 @@ A body must pass, IN ORDER:
   0. THE STATIC GATE (R31). Its SOURCE is parsed and walked against an AST
      whitelist before any execution; a blacklisted name/attribute/import dies
      with cause ``"static_gate"``.
-  1. ISOLATED EXECUTION (the sandbox). A crash, hang, network call, nested
+  1. ISOLATED EXECUTION (the sandbox). A crash, network call, nested
      process, native escape (ctypes/mmap), filesystem mutation, or a write
      outside the temp dir kills it: cause ``"sandbox_death"``. A malformed output
-     envelope kills it: cause ``"protocol_violation"``.
+     envelope kills it: cause ``"protocol_violation"``. THE HONEST CLOCK
+     (R148) splits a wall-clock death by whose fault it was: a body the machine
+     starved (``"sandbox_starved"``) is retried with a doubled wall before any
+     verdict is spoken -- starvation is the machine's mood, never the body's
+     sin; a body that held the machine and still could not finish
+     (``"sandbox_slow"``) or burned its cpu budget (``"sandbox_cpu_budget"``)
+     dies honestly, with no retry.
   2. DETERMINISM. The identical input is run twice; the two ``output.json`` byte
      strings must match. A body that varies run-to-run dies: ``"nondeterministic"``.
   3. SHADOW EQUIVALENCE (R35, Phase 5). When a grammar ``program`` is supplied,
@@ -34,7 +40,7 @@ maps to exactly one sealed death cause; the first failure wins.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -44,6 +50,7 @@ from app.pyramid.sandbox import static_gate
 from app.pyramid.sandbox.runner import (
     CAUSE_PROTOCOL,
     CAUSE_SANDBOX_DEATH,
+    CAUSE_STARVED,
     SandboxConfig,
     SandboxDeath,
     run_body,
@@ -60,6 +67,25 @@ CAUSE_SHADOW_MISMATCH = "shadow_mismatch"
 # (bypassed here), so a neutral valid family is used purely as the geometry
 # carrier — the verdict records the body's real label separately.
 _GEOMETRY_FAMILY = "trend_pullback"
+
+# THE HONEST CLOCK (R148): a run the MACHINE starved (the wall fired while the
+# body barely held the cpu) is retried with a doubled wall budget before any
+# verdict is spoken -- at most twice, then the starvation is named honestly in
+# the verdict. A slow body (it HELD the machine and still could not finish) is
+# never retried: that death is its own.
+_STARVATION_RETRIES = 2
+
+
+def _run_body_with_the_honest_clock(body_source, frame, *, genes, config):
+    """``run_body`` with the R148 starvation policy (see _STARVATION_RETRIES)."""
+    for attempt in range(_STARVATION_RETRIES + 1):
+        try:
+            return run_body(body_source, frame, genes=genes, config=config)
+        except SandboxDeath as d:
+            if d.cause != CAUSE_STARVED or attempt == _STARVATION_RETRIES:
+                raise
+            config = replace(config, timeout=config.timeout * 2.0)
+    raise AssertionError("unreachable")  # pragma: no cover - loop always returns
 
 
 @dataclass
@@ -235,7 +261,8 @@ def judge_body(
 
     # --- GATE 1: isolated execution -------------------------------------------
     try:
-        run = run_body(body_source, exec_frame, genes=genes, config=config)
+        run = _run_body_with_the_honest_clock(body_source, exec_frame,
+                                              genes=genes, config=config)
     except SandboxDeath as d:
         cause = d.cause
         return BodyVerdict(alive=False, causes=[cause],
@@ -245,7 +272,8 @@ def judge_body(
 
     # --- GATE 2: determinism ---------------------------------------------------
     try:
-        run2 = run_body(body_source, exec_frame, genes=genes, config=config)
+        run2 = _run_body_with_the_honest_clock(body_source, exec_frame,
+                                               genes=genes, config=config)
     except SandboxDeath as d:
         return BodyVerdict(alive=False, causes=[d.cause], gates=gates)
     if run2.output_json != run.output_json:
@@ -291,7 +319,8 @@ def judge_body(
                 exec_m["dxy"] = sensors_mod.dxy_proxy_series(
                     exec_m["ts"].to_numpy(), major_frames)
             try:
-                runm = run_body(body_source, exec_m, genes=genes, config=config)
+                runm = _run_body_with_the_honest_clock(body_source, exec_m,
+                                                       genes=genes, config=config)
             except SandboxDeath as d:
                 return BodyVerdict(alive=False, causes=[d.cause], gates=gates)
             # Compare only rows the mutated frame still shares with the original,

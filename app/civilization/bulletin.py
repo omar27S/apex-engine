@@ -329,6 +329,16 @@ def statistics_from(report: dict, *, volume=None, history=None,
         "retired": death.get("apoptosis") if isinstance(death, dict) else None,
         "king_children": king_children,
         "kings_born": (born_n if isinstance(born_n, int) else None),
+        # R147 — THE PAPER CROWN NAMED: the account's crown, split by what moved
+        # it. The finalists' curve is paper (research-grade, never dispatched);
+        # the dispatch-basis R rides beside it, honestly None until the first
+        # real order exists. The Dragon's demand made accounting law.
+        "dispatch_r": ((md.get("crown") or {}).get("realized_from_dispatch_r")
+                        if isinstance(md.get("crown"), dict) else None),
+        "paper_r": ((md.get("crown") or {}).get("paper_from_finalists_r")
+                     if isinstance(md.get("crown"), dict) else None),
+        "crown_basis": ((md.get("crown") or {}).get("basis")
+                         if isinstance(md.get("crown"), dict) else None),
     }
     out["_why"] = _reasons(r, out, wr_src)
     return out
@@ -375,6 +385,11 @@ def _reasons(report: dict, out: dict, wr_src: str) -> dict:
                           "il censimento non traccia i figli-del-re"),
         "kings_born": (None if out.get("kings_born") is not None else
                        "il report non porta il conteggio delle nascite"),
+        "dispatch_r": (None if out.get("dispatch_r") is not None else
+                        "nessun ordine mai piazzato (Build Mode): il conto e' carta "
+                        "di finalisti finche' il primo dispaccio non nasce"),
+        "paper_r": (None if out.get("paper_r") is not None else
+                    "nessuna curva dei finalisti nel registro del conto"),
     }
     if wr_src != "win_rate":
         why["wr_best"] = ("il report non porta win_rate (la resilienza di autopsia "

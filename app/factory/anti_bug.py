@@ -38,6 +38,12 @@ Twelve checks (one per law of the Director's DNA, in spirit):
                      FAST eye -- a quiet wire is a sleeping sensor, and the
                      systemd unit restarts it on its own; unborn until the
                      service's first install is SOFT, not a wound).
+* vault_hygienic -- R149: no state backup generations and no key file live in
+                     the vault, and a key file standing on disk has its lock
+                     written (fail: a backup is not history, a tracked key is a
+                     leak one push away, and an unnamed key house is one
+                     careless 'git add -A' from history -- the near-miss this
+                     eye was born from, 2026-10-23);
 And the standing doctrine:
 
 * quarantine_only -- the guardian NEVER touches the append-only factory ledger;
@@ -751,6 +757,52 @@ def _check_genealogy_alive(backend: Path, ctx: dict) -> tuple[bool, str]:
     return True, "il sangue: " + "; ".join(readings)
 
 
+def _check_vault_hygienic(backend: Path, ctx: dict) -> tuple[bool, str]:
+    """R149 — the vault's hygiene: backups are not history, keys are not cargo.
+
+    Three legs, all fail: (1) the heart's rotating state generations
+    (``*.bak*.json``) must never be tracked -- they are LOCAL crash recovery
+    that entered the vault once through a pipe's ``git add -A`` and were then
+    refreshed forever by ``git add -u``; (2) the Sage's key file
+    (``sage.env``) must never be tracked -- a live credential in the vault is
+    a leak one push away; (3) when the key's house stands on disk, the
+    vault's ``.gitignore`` must carry its name -- on 2026-10-23 the code
+    called sage.env "the gitignored file" while NO .gitignore existed, and
+    only the pipes' file-specific adds kept a working key out of history.
+    Honest abstention when git is silent or this is not a vault.
+    """
+    runner = ctx["runner"]
+    rc, _ = runner(["git", "rev-parse", "--show-toplevel"], cwd=backend)
+    if rc != 0:
+        return True, "not a git vault -- hygiene abstains honestly"
+    rc, out = runner(["git", "ls-files"], cwd=backend)
+    if rc != 0:
+        return True, "git silent on the vault -- hygiene abstains honestly"
+    tracked = [f for f in (out or "").splitlines() if f.strip()]
+    baks = sorted(f for f in tracked if ".bak" in f and f.endswith(".json"))
+    if baks:
+        return False, (f"{len(baks)} state backup generation(s) tracked in the "
+                       f"vault ({baks[0]} & co) -- a backup is local recovery, "
+                       "not history: git rm --cached them")
+    keys = sorted(f for f in tracked if Path(f).name == "sage.env")
+    if keys:
+        return False, (f"the key file {keys[0]} is tracked in the vault -- a "
+                       "live credential must live only on the machine: "
+                       "git rm --cached it")
+    house = backend / "sage.env"
+    if house.exists():
+        # the lock: the vault's own .gitignore must carry the key's name
+        rc2, top = runner(["git", "rev-parse", "--show-toplevel"], cwd=backend)
+        lock = Path(top.strip()) / ".gitignore" if rc2 == 0 and top.strip() else None
+        inscription = (lock.read_text(errors="ignore")
+                       if (lock and lock.exists()) else "")
+        if "sage.env" not in inscription:
+            return False, ("the key's house stands on disk but the vault's "
+                           ".gitignore does not name sage.env -- one careless "
+                           "'git add -A' swallows a live key into history")
+    return True, "no backup generations and no key files in the vault"
+
+
 CHECKS: tuple[tuple[str, str, object], ...] = (
     ("ledger_sealed", "fail", _check_ledger_sealed),
     ("ledger_alive", "warn", _check_ledger_alive),
@@ -770,6 +822,7 @@ CHECKS: tuple[tuple[str, str, object], ...] = (
     ("memory_quarantine", "warn", _check_memory_quarantine),
     ("organs_reborn", "warn", _check_organs_reborn),
     ("genealogy_alive", "warn", _check_genealogy_alive),
+    ("vault_hygienic", "fail", _check_vault_hygienic),
 )
 
 

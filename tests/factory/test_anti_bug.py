@@ -78,6 +78,13 @@ class Machine:
             if self.timer == "enabled":
                 return 0, "enabled\n"
             return 1, f"Failed to enable unit: {self.timer}\n"
+        if head == "git":
+            # R149: git speaks its REAL stdout here (the guardian's 19th eye
+            # reads 'git ls-files' output; before, every git answer was muted
+            # to its bare return code -- rc-only callers are unaffected).
+            proc = subprocess.run(cmd, cwd=cwd, capture_output=True,
+                                  text=True, timeout=60)
+            return proc.returncode, proc.stdout
         return subprocess.run(cmd, cwd=cwd, capture_output=True,
                               text=True, timeout=60).returncode, ""
 
@@ -943,3 +950,63 @@ def test_the_real_registry_on_the_real_tree():
     scars, complaints = verify_scars(backend, check_names=names)
     assert len(scars) >= 10, "the organism's biography must be present"
     assert complaints == [], complaints
+
+
+# ---------------------------------------------------------------------------
+# R149 — THE VAULT'S HYGIENE (the guardian's 19th eye: backups are not
+# history, keys are not cargo, and a standing key house must have its lock)
+# ---------------------------------------------------------------------------
+
+def test_a_tracked_backup_generation_wounds():
+    """The heart's rotating *.bakN.json tracked in the vault: not history."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "civilization_state.bak1.json").write_text("{}")
+    subprocess.run(["git", "add", "-A"], cwd=backend, check=True)
+    subprocess.run(["git", "commit", "-qm", "bak enters"], cwd=backend,
+                   check=True)
+    ok, detail = ab._check_vault_hygienic(backend, {"runner": Machine()})
+    assert not ok and "backup" in detail, detail
+
+
+def test_a_tracked_key_file_wounds():
+    """sage.env tracked in the vault: a live credential is a leak one push
+    away -- the vault must never carry it, whatever the pipes do."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "sage.env").write_text("SAGE_API_KEY=sk-never-printed\n")
+    subprocess.run(["git", "add", "-A"], cwd=backend, check=True)
+    subprocess.run(["git", "commit", "-qm", "key enters"], cwd=backend,
+                   check=True)
+    ok, detail = ab._check_vault_hygienic(backend, {"runner": Machine()})
+    assert not ok and "key" in detail, detail
+
+
+def test_a_standing_key_house_without_its_lock_wounds():
+    """The near-miss of 2026-10-23, made impossible: the key's house on disk
+    (untracked) while the vault's .gitignore does not name it -- one careless
+    'git add -A' swallows a live key into history."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "sage.env").write_text("SAGE_API_KEY=sk-never-printed\n")
+    ok, detail = ab._check_vault_hygienic(backend, {"runner": Machine()})
+    assert not ok and "gitignore" in detail, detail
+
+
+def test_a_locked_key_house_rounds_clean():
+    """The same standing house, now named in the lock: hygiene is whole."""
+    now = _now()
+    backend = _healthy_ward(_tmp(), now=now)
+    (backend / "sage.env").write_text("SAGE_API_KEY=sk-never-printed\n")
+    (backend / ".gitignore").write_text("sage.env\n")
+    ok, detail = ab._check_vault_hygienic(backend, {"runner": Machine()})
+    assert ok, detail
+
+
+def test_hygiene_abstains_when_git_is_silent():
+    """No vault, no verdict: outside git the eye abstains honestly (the
+    seed-check's own doctrine -- a judge who cannot see cannot condemn)."""
+    def deaf(cmd, cwd=None):
+        return 1, ""
+    ok, detail = ab._check_vault_hygienic(Path("/tmp"), {"runner": deaf})
+    assert ok and "abstains" in detail, detail

@@ -228,11 +228,43 @@ def structural_provocations(context: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _throne_why() -> str:
+    """R149 — name WHY the throne is mute, from what can actually be checked.
+
+    Three truths, never a guess: (1) a key sits in the process env and still
+    no word came -- the fault is upstream of the key, read the King's own
+    error (balance? network?); (2) the key's house stands on disk and this
+    process never loaded it -- the exact wound of 2026-10-23, when the heart
+    ran for days one ``load_env_file()`` away from a working Sage while the
+    Letter asked the CEO to connect a key that was already connected;
+    (3) no key anywhere -- the honest original case: the CEO connects one.
+    An EMPTY ``SAGE_API_KEY`` counts as unset (the systemd EnvironmentFile
+    trap this module already documents at ``NO_KEY_ERROR``).
+    """
+    if os.environ.get("SAGE_API_KEY", "").strip():
+        return ("la chiave e' nell'ambiente ma nessuna parola e' arrivata: "
+                "leggere l'errore del Re (saldo? rete?)")
+    house = pathlib.Path(os.environ.get("SAGE_ENV_FILE") or "sage.env")
+    if house.exists():
+        return (f"il file {house.name} esiste su disco ma questo processo non "
+                "l'ha caricato: chi parla deve chiamare load_env_file() "
+                "all'avvio")
+    return ("nessuna SAGE_API_KEY nell'ambiente e nessun file sage.env: "
+            "il CEO collega la chiave DeepSeek e il trono si siede")
+
+
 class StubSageBackend:
     """THE STUB — the honest placeholder. The throne awaits its king.
 
     It performs the STRUCTURAL provocations (real, deterministic) and states plainly
     that no model is installed. It never fabricates a model insight.
+
+    R149 — THE HONEST WHY: the stub once said "Il CEO collega la chiave
+    DeepSeek" while the key sat in sage.env one directory away and the door
+    answered 200 -- a wrong diagnosis that sent the CEO hunting for a key
+    that was already connected. The silence now NAMES what was checked (the
+    process env, the key file on disk, and whether the caller ever loaded
+    it), so a mute throne is diagnosable from its own words.
     """
 
     name = "stub"
@@ -244,9 +276,8 @@ class StubSageBackend:
                 pro: bool = False) -> list[dict]:
         insights = [{
             "kind": "warn",
-            "text": ("il trono attende il suo re: nessun modello risponde, quindi il "
-                     "Saggio riposa e non inventa. Il CEO collega la chiave DeepSeek "
-                     "e il trono si siede."),
+            "text": ("il trono attende il suo re: nessun modello risponde — "
+                     f"{_throne_why()}; quindi il Saggio riposa e non inventa."),
             "structural": True,
         }]
         for p in structural_provocations(context):

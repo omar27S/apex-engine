@@ -72,6 +72,18 @@ CULTURE: tuple[str, ...] = (
     "measure first; never assume a resource, a coverage, or a result",
 )
 
+# THE QUIET ROOM (R151): the bus is the ROOM where the civilization talks — it
+# keeps only the freshest BUS_WINDOW messages. "Quiet" (LAW 8) measures the
+# traffic of THIS cycle, never of history: the bus once grew unbounded (721
+# messages over 12 days, no trim anywhere) and the gate ``len(bus) <= 3``
+# could never open again — LAW 8 never ran once in the civilization's history.
+# The palace filled (R150) but the room never slept. The archive role belongs
+# to the ledger and the diary; the room keeps the recent talk.
+BUS_WINDOW: int = 120
+# The dream log the cycle owns is bounded like every palace (episodes 500,
+# activity 2000, monitors 24): the freshest DREAM_LOG dreams survive.
+DREAM_LOG: int = 100
+
 
 class Store:
     """The civilization's persistent memory, as a single JSON document.
@@ -184,6 +196,9 @@ def empty_state() -> dict:
         "legacy": [],
         "dreams": [],
         "episodes": [],
+        # THE HONEST FOLD (R151): the date of the report whose episodes were
+        # last folded — one night's experience enters the palace once.
+        "episodes_from": "",
         "culture": list(CULTURE),
         "self_model": {},
         "exchanges": [],
@@ -1563,6 +1578,18 @@ def _full_arsenal_block(store_state: dict, *, night_report: dict, readings: dict
     return block
 
 
+def _open_the_room(bus: list[dict]) -> int:
+    """Open the meeting room (R151 — THE QUIET ROOM): the bus keeps only its
+    freshest BUS_WINDOW messages, and the room's size when the meeting opened
+    is returned so the dream gate can measure the traffic born THIS cycle (LAW
+    8's own words: "a cycle with at most QUIET_MESSAGES interbrain messages"),
+    never the traffic of all history. Before R151 the unbounded bus (721
+    messages over 12 days) welded the gate shut: the palace filled (R150) but
+    the room never slept."""
+    del bus[:-BUS_WINDOW]
+    return len(bus)
+
+
 def run_cycle(store_state: dict, *, night_report: dict | None = None,
               powerups: dict | None = None, capacity_trials: int | None = None,
               patrol: bool = False, ts: str = "", pro: bool = False) -> dict:
@@ -1584,14 +1611,28 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     # ``council_cycle ... || true`` used to swallow on CI).
     backfill_state(store_state)
 
+    # THE QUIET ROOM (R151): open the room before anyone speaks — the bus keeps
+    # its rolling window (the archive lives in the ledger and the diary), and
+    # the size at open is remembered, so sleep is judged by the traffic born
+    # THIS cycle, never by the noise of history that welded the gate shut.
+    bus_at_open = _open_the_room(store_state["bus"])
+
     # 0. THE EPISODIC PALACE (E6): fold tonight's REAL trade narratives into the
     #    persistent state, so creative sleep (step 5) has episodes to consolidate
     #    and reconnect. Bounded to the most recent tail (the palace, not a hoard).
     #    Without this the palace was always empty and every dream was silent (BUG-7).
     episodes = night_report.get("episodes") or []
-    if episodes:
+    # THE HONEST FOLD (R151): a dated night folds EXACTLY ONCE. The report is
+    # born at 04:00 and read by every 3-hour meeting of the day: without the
+    # date-guard the same night's narratives entered the palace once per
+    # meeting (~8x/day), double-counting experience in the dream's index. An
+    # undated report (pre-R146 history) folds best-effort, as before.
+    fold_day = str(night_report.get("date") or "")
+    if episodes and (not fold_day or fold_day != store_state.get("episodes_from")):
         store_state["episodes"] = (list(store_state.get("episodes") or []) +
                                    list(episodes))[-500:]
+        if fold_day:
+            store_state["episodes_from"] = fold_day
 
     # 1. curiosity + self-model first (they shape the ideas and the world).
     cov = _realm_coverage(night_report)
@@ -1765,9 +1806,14 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
                                 kind="decision", body=da["reading"])
 
     # 5. creative sleep when the room is quiet (LAW 8) -> dream-born ideas enter.
-    if dreams.is_quiet(store_state["bus"]):
-        d = dreams.dream(store_state.get("episodes", []), bus=store_state["bus"], ts=ts)
+    #    QUIET MEANS THIS CYCLE (R151): only the messages born since the meeting
+    #    opened count against sleep — a busy history no longer welds the gate,
+    #    and a noisy meeting still honestly keeps the room awake.
+    this_cycle_traffic = store_state["bus"][bus_at_open:]
+    if dreams.is_quiet(this_cycle_traffic):
+        d = dreams.dream(store_state.get("episodes", []), bus=this_cycle_traffic, ts=ts)
         store_state["dreams"].append(d)
+        del store_state["dreams"][:-DREAM_LOG]
         for born in d["born_ideas"]:
             network.post_idea(store_state["interbrain"], author="dream",
                               idea=born["idea"])
@@ -2116,7 +2162,9 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
                     "lost": economy_block["lost"],
                     "spent": spent},
         "census": census.census_report(store_state["population"], store_state["legacy"]),
-        "dreams": dreams.dream_report(store_state["dreams"]),
+        # R151: the log is bounded (DREAM_LOG); the reading is the night's
+        # tail — the freshest day's dreams, not the whole archive.
+        "dreams": dreams.dream_report(store_state["dreams"][-8:]),
         "self_model": selfm,
         "curiosity": cmap,
         "minutes": ledger.minutes_digest(store_state["ledger"], last=6),

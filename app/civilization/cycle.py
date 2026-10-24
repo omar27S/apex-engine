@@ -1773,10 +1773,17 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     fresh_reqs, granted_reqs = _ceo_requests(store_state, cmap)
     for req in fresh_reqs:
         network.ask(store_state["bus"], sender="council", body=req, ts=ts)
+    # R152 — THE REGISTER SPEAKS ONCE: a standing order is announced when it
+    # is GRANTED (the fresh -> granted transition), never re-broadcast as a
+    # clone every cycle. The register's memory lives in the state
+    # (standing_orders); a re-announced order ate the quiet budget forever —
+    # a house with N standing orders could never dream, no matter how still
+    # it stood.
+    prev_orders = set(store_state.get("standing_orders") or [])
     for req in granted_reqs:
-        # the register already covers it: the standing order is BROADCAST, not re-asked
-        network.broadcast(store_state["bus"], sender="ceo-directive",
-                          body=f"direttiva permanente: {req}", ts=ts)
+        if req not in prev_orders:
+            network.broadcast(store_state["bus"], sender="ceo-directive",
+                              body=f"direttiva permanente: {req}", ts=ts)
     store_state["standing_orders"] = list(granted_reqs)
 
     # 4c. THE DELIBERATION CEREMONY (D2) + THE NETWORK'S HEALTH (D5): the Council's

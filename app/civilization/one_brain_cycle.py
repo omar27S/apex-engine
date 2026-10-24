@@ -130,8 +130,33 @@ def _packages(night_report: dict, state: dict, ts: str) -> list[dict]:
     return pkgs
 
 
+def _condemned_families(ledger: list) -> list[str]:
+    """Families the Council condemned by E4 (retire_family decisions).
+
+    R152 — THE GHOST CONDEMNED: the belief once rode the report's rows
+    alone, so it counted families the Council had condemned hours before
+    (the Sage's 21:54 synthesize: "the census counts four ghosts as
+    alive"). Derived from the EVENTS, never hand-transported: the extra
+    ``family`` field when the entry carries it (R147+), the ``what`` text
+    for the pre-extra history.
+    """
+    out = set()
+    for e in ledger or []:
+        if e.get("kind") != "retire_family":
+            continue
+        fam = e.get("family")
+        if not fam:
+            what = str(e.get("what") or "")
+            if what.startswith("retire the family "):
+                fam = what[len("retire the family "):].strip()
+        if fam:
+            out.add(str(fam))
+    return sorted(out)
+
+
 def _market_model(night_report: dict, *, version: int, ts: str,
-                  hawk: dict | None = None, futures: dict | None = None) -> dict:
+                  hawk: dict | None = None, futures: dict | None = None,
+                  condemned: list[str] | None = None) -> dict:
     """The unified market model from the report's REAL axes (honest).
 
     C5 — THE MARKET MODEL'S SENSES: the model also absorbs the HAWK's live ticks
@@ -166,8 +191,16 @@ def _market_model(night_report: dict, *, version: int, ts: str,
                                sessions=sessions, resilience=resilience,
                                version=version, ts=ts)
     if pairs:
-        m["belief"] = (f"il mondo ha {len(pairs)} famiglia/e: "
-                       f"{', '.join(pairs)}")
+        belief = f"il mondo ha {len(pairs)} famiglia/e: {', '.join(pairs)}"
+        # R152 — THE GHOST CONDEMNED: the rows stay (they ran — the
+        # factory's truth) and the CONDEMNATION is named beside them (the
+        # Council's truth): the model holds both, never either alone.
+        condemned_running = sorted(set(condemned or []) & set(pairs))
+        if condemned_running:
+            belief += (f" — {len(condemned_running)} condannata/e (E4): "
+                       f"{', '.join(condemned_running)}")
+        m["belief"] = belief
+        m["condemned"] = condemned_running
     if sessions:
         m["senses"] = sorted(sessions)
     return m
@@ -211,7 +244,9 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
     # --- the unified market model (versioned) + what changed ------------------
     #     C5: the model also absorbs the hawk's live ticks + the futures context.
     model = _market_model(night_report, version=version, ts=ts,
-                          hawk=hawk, futures=futures)
+                          hawk=hawk, futures=futures,
+                          condemned=_condemned_families(
+                              store_state.get("ledger") or []))
     model_change = one_brain.market_model_changed(ob.get("model"), model)
 
     # --- THE CAREER LEDGER (R142): the civilization's memory of merit across ----

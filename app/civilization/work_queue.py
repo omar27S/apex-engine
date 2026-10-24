@@ -201,7 +201,7 @@ def from_council(decisions: list[dict], *, ts: str = "") -> list[dict]:
             out.append(work_item(
                 "council_burst", what=d.get("what", "council burst"),
                 why=d.get("why", "the Council decided"), weight=-1,
-                source="council", ts=ts,
+                source="council", ts=(d.get("ts") or ts),
                 extra={"trials": trials, "idea": d.get("idea")}))
         elif d.get("kind") == "cure_family":
             # R147 — the treatment burst: a cure that never touches the queue
@@ -211,7 +211,7 @@ def from_council(decisions: list[dict], *, ts: str = "") -> list[dict]:
                 "council_burst",
                 what=f"treatment for the family {d.get('family', '?')}",
                 why=str(d.get("why") or "the Council decided"),
-                weight=-1, source="council", ts=ts,
+                weight=-1, source="council", ts=(d.get("ts") or ts),
                 extra={"trials": int(d.get("trials") or 200),
                        "idea": f"treatment for the family {d.get('family', '?')}",
                        "family": d.get("family"), "course": d.get("course"),

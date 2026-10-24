@@ -94,6 +94,44 @@ TABLE_METRICS: tuple[tuple[str, str, str, str], ...] = (
 _GOAL_WR = 0.90  # the objective: 90% win rate
 
 
+def _the_account_note(st) -> str | None:
+    """R156 — THE HONEST NOTE: the account's voice, read from the crown's truth.
+
+    R147 named the paper crown and the note said "nessun ordine mai piazzato";
+    R155 wired the mouth's ledger into the crown, and the note must follow:
+    when the crown counts dispatches, the voice names BOTH accounts — the
+    finalists' research paper AND the tape's live verdict. The old
+    single-voice note (honest for its time) survives for the paper crown;
+    no crown, no note. Never again "nessun ordine mai piazzato" printed
+    beside a counted dispatch.
+    """
+    if not isinstance(st, dict):
+        return None
+    paper = st.get("paper_r")
+    basis = st.get("crown_basis")
+    dispatched = st.get("dispatched_trades")
+    resolved = st.get("live_resolved")
+    dispatch_r = st.get("dispatch_r")
+    live_dd = st.get("live_dd_r")
+    if (dispatched or 0) > 0:
+        voice = ("Il conto ha due voci: la carta dei finalisti"
+                 + (f" ({paper} R di carta accumulati)"
+                    if paper is not None else "")
+                 + " e il nastro VIVO"
+                 + f" — {dispatched} ordini piazzati"
+                 + (f", {resolved} giudicati" if resolved is not None else "")
+                 + (f", netto {dispatch_r} R" if dispatch_r is not None else "")
+                 + (f", DD vivo {live_dd} R" if live_dd is not None else ""))
+        return voice + ": il nastro e' il giudice, la ricerca e' ipotesi."
+    if basis or paper is not None:
+        return ("Il conto e' carta di finalisti (nessun ordine mai piazzato"
+                + (f"; base: {basis}" if basis else "")
+                + (f"; {paper} R di carta accumulati" if paper is not None else "")
+                + "): l'R che nasce dal dispaccio vivo e' ancora non misurato — "
+                  "il primo ordine piazzato aprira' il conto vero.")
+    return None
+
+
 def _num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
@@ -439,14 +477,12 @@ def _voice(report: dict, st: dict, table: dict, *, civilization, thermometer,
     # (the finalists' simulation) is honest research — but a crown it must never
     # wear again without its name. The first dispatched order opens the live
     # account; until then the mirror says "carta", not "equity".
-    _paper = st.get("paper_r") if isinstance(st, dict) else None
-    _crown_basis = st.get("crown_basis") if isinstance(st, dict) else None
-    if _crown_basis or _paper is not None:
-        L.append("  Il conto e' carta di finalisti (nessun ordine mai piazzato"
-                 + (f"; base: {_crown_basis}" if _crown_basis else "")
-                 + (f"; {_paper} R di carta accumulati" if _paper is not None else "")
-                 + "): l'R che nasce dal dispaccio vivo e' ancora non misurato — "
-                   "il primo ordine piazzato aprira' il conto vero.")
+    # R156 — THE HONEST NOTE: one derivation, called here — the voice follows
+    # the crown's truth (both voices when the dispatch is counted, the honest
+    # single voice for the paper crown, silence without a crown).
+    _note = _the_account_note(st)
+    if _note:
+        L.append("  " + _note)
     # W4 (the false triumph): a deployable fraction measured on a YOUNG pain
     # ledger is measured-zero, not measured-safe (the Dragon's own doctrine:
     # ambition rises only on evidence).  With < 7 nights of the account's memory

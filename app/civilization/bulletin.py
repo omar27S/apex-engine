@@ -230,8 +230,21 @@ def statistics_from(report: dict, *, volume=None, history=None,
     else:
         _dd_col = _col("measured_dd_r")
         _dd_for_fraction = round(max(_dd_col), 4) if _dd_col else None
+    _deployable_basis = None
     if _realized_dd is not None:
-        _deployable_pct = md.get("implied_deployable_pct")
+        # R154 — THE WITNESSED HEADLINE: a PAPER crown (no order ever
+        # dispatched) cannot certify its own safety with the raw law. The
+        # headline is the WITNESSED fraction (what the realized nights can
+        # vouch for); the implied stays in the block for continuity. The
+        # derivation is charter's ONE pure function — read pre-written
+        # when the tournament stamped it, derived on the spot when it did
+        # not — so the two can never disagree, and a legacy block without
+        # a crown keeps its old reading (idempotent on history).
+        _head = _charter.headline_deployable(md)
+        _deployable_pct = _head.get("headline_deployable_pct")
+        _deployable_basis = _head.get("headline_deployable_basis")
+        if _deployable_pct is None:
+            _deployable_pct = md.get("implied_deployable_pct")
     elif _dd_for_fraction:
         _deployable_pct = round(
             _charter.deployable_fraction(_dd_for_fraction) * 100.0, 2)
@@ -305,6 +318,10 @@ def statistics_from(report: dict, *, volume=None, history=None,
                  else (round(max(_col("measured_dd_r")), 4)
                        if _col("measured_dd_r") else None)),
         "deployable_pct": _deployable_pct,
+        # R154 — WHICH CROWN SPOKE: witnessed (paper) or implied (live), so
+        # the Letter can name the basis of the number it prints — a number
+        # without its basis is how the inflation hid for so long.
+        "deployable_pct_basis": _deployable_basis,
         # W4 (the young ledger): how many REAL nights the account's memory of
         # pain holds behind the deployable fraction -- so the Letter can tell a
         # measured-on-evidence number from a measured-on-one-night number.

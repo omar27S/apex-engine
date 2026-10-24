@@ -581,6 +581,117 @@ def judge_decision(decision: dict, context: dict, *, backend=None, ts: str = "")
             "error": env.get("error")}
 
 
+def _live_family_metrics(state: dict) -> dict:
+    """R154 — the world model's live resilience per family (absent -> {})."""
+    model = ((state or {}).get("one_brain") or {}).get("model") or {}
+    res = model.get("resilience")
+    if not isinstance(res, dict):
+        return {}
+    return {str(f): float(v) for f, v in res.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)}
+
+
+def _capture_claim(st: dict, decision: dict) -> dict | None:
+    """R154 — the mechanical claim behind a retire-dissent (at verdict time).
+
+    The Dragon's dissent is a voice, not a measurement; the RECKONING
+    measures whether its reading of the LIVE data held. The claim is
+    captured from the world model AT THE MOMENT OF THE VERDICT: the
+    family's live resilience, the live median, its rank. Without a claim
+    (family unknown, or absent from the live world) there is nothing to
+    reckon — the dissent keeps its voice, never a fabricated score.
+    """
+    extra = decision.get("extra") or {}
+    fam = str(extra.get("family") or decision.get("family") or "").strip()
+    if not fam:
+        what = str(decision.get("what") or "")
+        mark = "retire the family "
+        if what.startswith(mark):
+            fam = what[len(mark):].strip()
+    live = _live_family_metrics(st)
+    if not fam or fam not in live:
+        return None
+    vals = sorted(live.values(), reverse=True)
+    median = vals[len(vals) // 2] if vals else None
+    rank = 1 + sum(1 for v in live.values() if v > live[fam])
+    return {"family": fam, "resilience": live[fam],
+            "median_resilience": median, "rank": rank, "n_live": len(live)}
+
+
+def reckon_dissents(state: dict) -> dict:
+    """R154 — THE DISSENT'S RECKONING: the Dragon's dissents finally meet data.
+
+    For every unresolved retire_family dissent with a captured claim:
+    * still measurable and STILL the strongest live body for two reckonings
+      -> the reading held (correct=True, the live data kept standing
+      behind the dissent after the verdict);
+    * its live resilience DECAYED below the live median -> the verdict
+      aged better than the reading (correct=False);
+    * the family LEFT the measurable world -> resolved by the captured
+      claim: retired at/above the live median, the council killed what
+      the data stood behind (True); retired below it, the dissent had
+      no live legs (False).
+    Everything else stays honestly unresolved (None). Mutates the
+    judgments in place; returns the beat's reading. Never raises.
+    """
+    try:
+        slot = (state or {}).get("dragon") or {}
+        live = _live_family_metrics(state)
+        vals = sorted(live.values(), reverse=True)
+        median = vals[len(vals) // 2] if vals else None
+        resolved = 0
+        for j in (slot.get("judgments") or []):
+            if not (j.get("dissent") and j.get("kind") == "retire_family"
+                    and j.get("correct") is None):
+                continue
+            claim = j.get("claim") or {}
+            fam = str(claim.get("family") or "")
+            if not fam:
+                continue
+            if fam in live:
+                if live[fam] >= max(live.values()):
+                    j["reckon_streak"] = int(j.get("reckon_streak") or 0) + 1
+                    if j["reckon_streak"] >= 2:
+                        j["correct"] = True
+                        j["outcome"] = (
+                            "the live data kept standing behind the dissent: "
+                            f"{fam} still the strongest measurable body "
+                            f"(resilience {live[fam]:.4f}) after the verdict")
+                        resolved += 1
+                elif median is not None and live[fam] < median:
+                    j["correct"] = False
+                    j["outcome"] = (
+                        "the live resilience the Dragon defended decayed "
+                        f"below the median ({live[fam]:.4f} < {median:.4f}): "
+                        "the verdict aged better than the reading")
+                    resolved += 1
+                # middle of the pack: honestly unresolved
+            else:
+                cm = claim.get("median_resilience")
+                cr = claim.get("resilience")
+                if isinstance(cm, (int, float)) and isinstance(cr, (int, float)):
+                    if cr >= cm:
+                        j["correct"] = True
+                        j["outcome"] = (
+                            f"{fam} left the measurable world retired at/above "
+                            f"the live median (resilience {cr:.4f} vs median "
+                            f"{cm:.4f}): the council killed what the data "
+                            "stood behind")
+                    else:
+                        j["correct"] = False
+                        j["outcome"] = (
+                            f"{fam} left the measurable world below the live "
+                            f"median ({cr:.4f} < {cm:.4f}): the dissent had "
+                            "no live legs")
+                    resolved += 1
+        return {"resolved": resolved,
+                "reading": (f"{resolved} dissenso/i regolato/i dai dati vivi"
+                            if resolved else
+                            "nessun dissenso regolato (l'onesto resta non misurato)")}
+    except Exception as e:  # noqa: BLE001 — the reckoning must never break the beat
+        return {"resolved": 0, "error": f"{type(e).__name__}: {e}"}
+
+
 def judge_gate(state: dict, decisions: list[dict], *, backend=None, ts: str = "",
                report: dict | None = None) -> dict:
     """Weigh every big call in the session; record the verdicts (dissent kept whole).
@@ -601,12 +712,21 @@ def judge_gate(state: dict, decisions: list[dict], *, backend=None, ts: str = ""
             res = judge_decision(d, context, backend=be, ts=ts)
             sp.record_cost(st, res.get("usage") or {}, model=res.get("model", ""),
                            kind="dragon_judgment", ts=ts)
-            judgments.append({"ts": ts, "kind": d.get("kind"), "what": d.get("what"),
-                              "verdict": res.get("verdict"),
-                              "reasoning": res.get("reasoning"),
-                              "weight": DRAGON_WEIGHT, "dissent": res.get("verdict") == "dissent",
-                              "outcome": None, "correct": None,
-                              "error": res.get("error")})
+            _j = {"ts": ts, "kind": d.get("kind"), "what": d.get("what"),
+                  "verdict": res.get("verdict"),
+                  "reasoning": res.get("reasoning"),
+                  "weight": DRAGON_WEIGHT, "dissent": res.get("verdict") == "dissent",
+                  "outcome": None, "correct": None,
+                  "error": res.get("error")}
+            # R154 — THE CAPTURED CLAIM: a retire-dissent carries the live
+            # data it stood on, so a later reckoning can measure whether
+            # the reading held (the Dragon's accountability stops being a
+            # promise). No claim, no reckoning — never a fabricated score.
+            if _j["dissent"] and d.get("kind") == "retire_family":
+                _claim = _capture_claim(st, d)
+                if _claim is not None:
+                    _j["claim"] = _claim
+            judgments.append(_j)
         slot["judgments"] = (list(slot.get("judgments") or []) + judgments)[-100:]
         dissents = [j for j in judgments if j.get("dissent")]
         return {"ok": bool(judgments), "judgments": judgments,
@@ -721,7 +841,36 @@ def analysis(context: dict, *, backend=None, ts: str = "", period: str = "day") 
     text = _extract_text(env).strip()
     finish = str(env.get("finish_reason") or "").lower()
     truncated = bool(text) and (finish == "length" or _looks_cut(text))
+    continued = False
+    if truncated:
+        # R154 — THE UNBROKEN VOICE: the gag healed twice (W1 gave the mouth
+        # room and the truncation flag; the letter of 2026-10-24 proves the
+        # gag outlived it — "la bocca del Drago e' stata imbavagliata a meta'
+        # frase"). The mouth now gets ONE continuation: finish the thought
+        # from where it stopped, never repeat the beginning. If the
+        # continuation dies too, the truncation stays honest — the Letter
+        # tells the CEO the strongest mind could not finish, it never hides
+        # the amputation behind a splice.
+        tail = text[-600:]
+        csys = ("Sei il DRAGO di APEX. Il tuo pensiero e' stato interrotto dal "
+                "limite di token. FINISCILO: riparti esattamente da dove si "
+                "era fermato, NON ripetere l'inizio, completa il ragionamento "
+                "e CHIUDI con una frase completa. Italiano.")
+        cenv = ask(f"Il tuo pensiero interrotto finiva cosi':\n...{tail}\n\n"
+                   f"Finiscilo.",
+                   deep=True, system=csys, max_tokens=1000, temperature=0.5)
+        ctext = _extract_text(cenv).strip()
+        if ctext:
+            text = text + "\n\n(prosecuzione)\n" + ctext
+            continued = True
+            cfinish = str(cenv.get("finish_reason") or "").lower()
+            truncated = (cfinish == "length" or _looks_cut(ctext))
+            _u1 = env.get("usage") or {}
+            _u2 = cenv.get("usage") or {}
+            env = {**env, "usage": {k: ((_u1.get(k) or 0) + (_u2.get(k) or 0))
+                                    for k in (set(_u1) | set(_u2))}}
     return {"ok": bool(env.get("ok")) and bool(text), "text": text,
+            "continued": continued,
             "model": env.get("model", ""), "usage": env.get("usage") or {},
             "period": period, "error": env.get("error"),
             "truncated": truncated, "finish_reason": finish or None}
@@ -764,8 +913,10 @@ def ceo_analyst_cycle(state: dict, *, backend=None, ts: str = "",
         if res.get("ok"):
             rec = {"ts": ts, "text": res["text"], "period": period,
                    "model": res.get("model", ""), "outcome": None, "correct": None,
-                   # W1: the archive remembers whether the mouth was amputated.
-                   "truncated": bool(res.get("truncated"))}
+                   # W1: the archive remembers whether the mouth was amputated;
+                   # R154: and whether the continuation finished it.
+                   "truncated": bool(res.get("truncated")),
+                   "continued": bool(res.get("continued"))}
             key = "analyses" if period == "day" else "letters"
             slot[key] = (list(slot.get(key) or []) + [rec])[-30:]
         slot["last_analysis_ts"] = ts
@@ -980,6 +1131,10 @@ def dragon_cycle(state: dict, *, backend=None, ts: str = "",
     ts = ts or _now()
     out: dict = {"ts": ts, "mode": mode}
     try:
+        # R154 — THE RECKONING FIRST: unresolved dissents meet the live data
+        # every beat, before the new verdicts are weighed (mechanical,
+        # fail-open, honest about everything it cannot measure).
+        out["reckoning"] = reckon_dissents(st)
         if mode in ("think", "all"):
             out["thought"] = dragon_thought_cycle(st, backend=backend, ts=ts,
                                                   report=report)

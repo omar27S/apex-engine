@@ -113,6 +113,35 @@ def deployable_fraction(measured_dd_r: float, *,
     return witnessed_fraction(raw, evidence_nights=evidence_nights)
 
 
+def headline_deployable(block: dict) -> dict:
+    """R154 — THE WITNESSED HEADLINE: which deployable fraction the CEO reads.
+
+    A LIVE crown (orders dispatched) certifies the implied fraction — the
+    raw law applied to a realized DD. A PAPER crown (no order ever
+    dispatched) cannot certify its own safety: the headline is the
+    WITNESSED fraction, what the realized nights can actually vouch for.
+    The Dragon's first denuncia of 2026-10-24, amputated mid-sentence by
+    the token limit, was exactly this: "witnessed 28.57%, implied 100% —
+    that 71.4% is not a safety margin, it is INFLATION". Zero measured
+    stays zero measured: the evidence grows with nights, never with the
+    absence of dispatch.
+    """
+    block = block or {}
+    crown = block.get("crown") or {}
+    if (crown.get("dispatched_trades") or 0) > 0:
+        return {"headline_deployable_pct": block.get("implied_deployable_pct"),
+                "headline_deployable_basis": "implied (the live crown dispatches)"}
+    if block.get("witnessed_deployable_pct") is not None:
+        return {"headline_deployable_pct": block.get("witnessed_deployable_pct"),
+                "headline_deployable_basis": (
+                    "witnessed (the crown is paper: no order ever dispatched; "
+                    "the evidence stands behind what it can vouch for, never "
+                    "the raw law)")}
+    return {"headline_deployable_pct": block.get("implied_deployable_pct"),
+            "headline_deployable_basis": (
+                "implied (no witness nights behind the number yet)")}
+
+
 def dd_trend(realized_dd_r: float, prior_dd_r: float | None) -> dict:
     """The direction of DD: the state's standing job is to make it FALL."""
     if prior_dd_r is None:

@@ -356,6 +356,15 @@ def statistics_from(report: dict, *, volume=None, history=None,
                      if isinstance(md.get("crown"), dict) else None),
         "crown_basis": ((md.get("crown") or {}).get("basis")
                          if isinstance(md.get("crown"), dict) else None),
+        # R155 — THE LIVE CROWN: the counts the Letter prints -- how many
+        # orders the house actually placed on the tape, how many the tape
+        # judged, the DD the live curve ate.
+        "dispatched_trades": ((md.get("crown") or {}).get("dispatched_trades")
+                               if isinstance(md.get("crown"), dict) else None),
+        "live_resolved": ((md.get("crown") or {}).get("live_resolved")
+                           if isinstance(md.get("crown"), dict) else None),
+        "live_dd_r": ((md.get("crown") or {}).get("live_dd_r")
+                       if isinstance(md.get("crown"), dict) else None),
     }
     out["_why"] = _reasons(r, out, wr_src)
     return out

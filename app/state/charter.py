@@ -125,10 +125,57 @@ def headline_deployable(block: dict) -> dict:
     that 71.4% is not a safety margin, it is INFLATION". Zero measured
     stays zero measured: the evidence grows with nights, never with the
     absence of dispatch.
+
+    R155 — THE LIVE CROWN: when the crown carries its live measurements
+    (``live_resolved`` judged dispatches and the ``live_dd_r`` the tape
+    measured), the 8% law applies to the LIVE DD — the tape is the judge,
+    the research curve a hypothesis — witnessed by the count of judged
+    dispatches. A dispatch born with nothing judged yet keeps the paper
+    witness; a legacy crown (dispatch counted, measurements absent) keeps
+    the implied reading it was given: committed bytes never change voice.
     """
     block = block or {}
     crown = block.get("crown") or {}
     if (crown.get("dispatched_trades") or 0) > 0:
+        if "live_resolved" in crown:
+            # R155 — the crown carries its live measurements: the law
+            # follows the tape, never the research curve's desire.
+            live_dd = crown.get("live_dd_r")
+            resolved = crown.get("live_resolved") or 0
+            if (isinstance(live_dd, (int, float)) and live_dd >= 0
+                    and live_dd == live_dd and live_dd != float("inf")
+                    and int(resolved) > 0):
+                try:
+                    raw = (deployable_fraction(float(live_dd))
+                           if float(live_dd) > 0.0 else 1.0)
+                except ValueError:
+                    raw = None
+                if raw is not None:
+                    frac = witnessed_fraction(raw, evidence_nights=int(resolved))
+                    return {"headline_deployable_pct": round(frac * 100.0, 2),
+                            "headline_deployable_basis": (
+                                "live dispatch (the 8% law on the LIVE measured "
+                                f"DD {float(live_dd):.2f}R over {int(resolved)} "
+                                "judged dispatches; the tape is the judge, the "
+                                "research curve a hypothesis)")}
+            if int(resolved or 0) == 0:
+                # dispatch is born, nothing judged on the tape yet: the paper
+                # witness still speaks (the realized nights remain the best
+                # evidence the house has).
+                if block.get("witnessed_deployable_pct") is not None:
+                    return {"headline_deployable_pct":
+                            block["witnessed_deployable_pct"],
+                            "headline_deployable_basis": (
+                                "witnessed (dispatch is born but nothing judged "
+                                "on the tape yet; the realized nights remain the "
+                                "best evidence)")}
+                return {"headline_deployable_pct":
+                        block.get("implied_deployable_pct"),
+                        "headline_deployable_basis": (
+                            "implied (dispatch is born, nothing judged yet, and "
+                            "no witness nights behind the number)")}
+        # legacy live shape (dispatch counted, no live measurements carried):
+        # the committed bytes keep the reading they were given.
         return {"headline_deployable_pct": block.get("implied_deployable_pct"),
                 "headline_deployable_basis": "implied (the live crown dispatches)"}
     if block.get("witnessed_deployable_pct") is not None:

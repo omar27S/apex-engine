@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 
 from app.civilization import career as career_mod
+from app.civilization import council as council_mod  # noqa: E402
 from app.civilization import gaze, mind, one_brain, playground
 
 __all__ = ["run_one_brain", "minds_from_report", "TITANIUM_FLOOR"]
@@ -152,6 +153,35 @@ def _condemned_families(ledger: list) -> list[str]:
         if fam:
             out.add(str(fam))
     return sorted(out)
+
+
+def _collision_annotations(refusals: list[dict], granted: set[str]) -> list[dict]:
+    """R153 — THE COLLISION'S ARBITER (the Sage's warn, made law).
+
+    The CEO authorized pareto_space at 04:17:34 and the field refused the
+    scouts at 04:17:34 — same second, two authorities, and nobody wrote who
+    wins. The answer is that BOTH stand, each on its own ground: the CEO
+    grants the EYES (the standing directive authorizes the realm), the field
+    owns the FORGE (its measured score decides what gets funded). The
+    collision is annotated and named — never left to drift as an unexplained
+    pair of contradictory rows in the ledger.
+    """
+    out: list[dict] = []
+    for r in refusals or []:
+        idea = str((r or {}).get("idea") or "")
+        realm = next((x for x in (granted or set()) if str(x).lower() in idea.lower()),
+                     None)
+        if realm is None:
+            continue
+        out.append({
+            "realm": realm, "idea": idea,
+            "reading": (f"the CEO granted the eyes (the standing directive "
+                        f"authorizes {realm}) while the field refused the forge "
+                        f"(its measured score) — both stand: the exploration is "
+                        f"authorized, the funding is not; only new evidence "
+                        f"(attention grown, or the veto proven wrong) reopens "
+                        f"the question")})
+    return out
 
 
 def _market_model(night_report: dict, *, version: int, ts: str,
@@ -294,6 +324,23 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
     ob["belief_ledger"] = (ob.get("belief_ledger") or []) + \
         mind.revisitation("council", yesterday=yesterday, today=today)
     ob["last_model_belief"] = today
+    # R153 — THE THREE VERBS: the world's families get their verbs. A family
+    # set that changes three quarters of its members is not a string that
+    # "moved" — each member is born, dies, or (the alarm) WALKS BACK IN
+    # after E4 condemned it. The pulse (vitality, continuity) rides the
+    # block so the census and the Letter can speak the two honest numbers.
+    _yfams = [f for f in str((yesterday or {}).get("model.pairs") or "").split(",")
+              if f]
+    family_pulse = mind.family_transitions(
+        _yfams, list(model.get("pairs") or []),
+        condemned=_condemned_families(store_state.get("ledger") or []))
+    ob["belief_ledger"] = (ob.get("belief_ledger") or []) + family_pulse["rows"]
+    _v, _c = family_pulse.get("vitality"), family_pulse.get("continuity")
+    family_pulse["reading"] = (
+        f"{family_pulse['births']} nascita/e, {family_pulse['deaths']} morte/i, "
+        f"{family_pulse['resurrections']} resurrezione/i — vitalita' "
+        f"{'non misurata' if _v is None else format(_v, '.2f')}, continuita' "
+        f"{'non misurata' if _c is None else format(_c, '.2f')}")
 
     # --- the decisions (with a soul) + the veto + the Kelly voice ------------
     supporters = sorted([f for f, m in minds.items()
@@ -315,6 +362,11 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
     # the state (only the RETURNED block was trimmed) — a palace, not a hoard
     # (the same cure the play queue received, BUG-3b's family).
     ob["refusals"] = ob["refusals"][-200:]
+    # R153 — THE COLLISION'S ARBITER: annotate the CEO-grant vs field-refusal
+    # pairs (both stand, each on its own ground) — the ledger stops carrying
+    # unexplained contradictions.
+    ob["collisions"] = _collision_annotations(
+        ob["refusals"], council_mod.granted_realms())
     packages = _packages(night_report, store_state, ts)
     # THE GAZE feeds the brain (Part Five): the visual context the eyes produced this
     # night rides every package as first-class evidence, and a sighting that several
@@ -426,9 +478,11 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         "theories_retired_now": len(retired_now),
         "retired_theories": (ob.get("retired_theories") or [])[-12:],
         "belief_ledger": ob["belief_ledger"][-8:],
+        "family_pulse": family_pulse,
         "play": play, "play_items": play_items,
         "synergy": synergy, "generation": gen, "bias_audit": audit,
         "refusals": ob["refusals"][-12:], "veto_calibration": calibration,
+        "collisions": (ob.get("collisions") or [])[-6:],
         "generation_archive": archive,
         "family_careers": career_mod.career_report(career_ledger),
         "visual": {"context": visual_ctx, "convergent": convergence,

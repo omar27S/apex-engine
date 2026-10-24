@@ -178,6 +178,41 @@ def _load_gating(state_path: str | None) -> dict:
     return dict(gating) if isinstance(gating, dict) else {}
 
 
+def _load_retired(state_path: str | None) -> tuple:
+    """R153 — THE RETIREMENT THAT REACHES THE GENE POOL: the Council's E4
+    verdicts, read from the civilization state's ledger (retire_family rows).
+
+    Same derivation the One Brain uses (the ``family`` field first — the
+    extras ride flattened on the row — then a nested ``extra.family``, then
+    the legacy "retire the family " text prefix), so the factory and the
+    belief never disagree about who is dead. Honest: a missing/unreadable
+    state (or no verdicts) yields ``()`` — the factory draws every family,
+    exactly as before the Council ever condemned one.
+    """
+    if not state_path:
+        return ()
+    p = Path(state_path)
+    if not p.exists():
+        return ()
+    try:
+        payload = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return ()
+    ledger = payload.get("ledger") if isinstance(payload, dict) else None
+    out = set()
+    for e in ledger or []:
+        if not isinstance(e, dict) or e.get("kind") != "retire_family":
+            continue
+        fam = e.get("family") or (e.get("extra") or {}).get("family")
+        if not fam:
+            what = str(e.get("what") or "")
+            if what.startswith("retire the family "):
+                fam = what[len("retire the family "):].strip()
+        if fam:
+            out.add(str(fam))
+    return tuple(sorted(out))
+
+
 def _stitch_live_edge(m15, tape_rows: list[dict] | None):
     """R120 -- THE LIVING UNIVERSE: fold the tape's bars beyond the parquet
     edge onto the frame, in memory (no writes, no contention with the
@@ -355,6 +390,7 @@ def main(argv=None) -> int:
         pairs=tuple(sorted(universe)),
         directed=_load_directed(args.directed),
         regime_gating=_load_gating(args.state),
+        retired_families=_load_retired(args.state),
         layers_quota=args.layers_quota,
         champion_seats=args.champion_seats,
         screen_survival=args.screen_survival,

@@ -502,6 +502,44 @@ def _refused_ideas(state: dict) -> list[dict]:
             if r.get("idea")]
 
 
+def _digest_interbrain(interbrain: list[dict], *, settles: list[dict],
+                       refusals: list[dict]) -> dict:
+    """R153 — THE DIGESTION: close the interbrain's measured ideas.
+
+    An idea the Council forged and the night MEASURED closes (delivered, or
+    no survivor — the outcome is the completion note); an idea the field
+    REFUSED closes too (E9 is a measurement, and a measured idea is a
+    digested idea). The registry once held 232 voices, all "open", zero
+    closed — a house that accumulated attention and never swallowed a bite
+    (the Dragon's second black hole). Pure: mutates the nodes in place and
+    returns the honest count of what closed now.
+    """
+    needles: dict[str, str] = {}
+    for s in settles or []:
+        idea = str((s or {}).get("idea") or "")
+        if idea:
+            needles[idea] = f"settled: {(s or {}).get('outcome_kind')}"
+    for r in refusals or []:
+        idea = str((r or {}).get("idea") or "")
+        if idea and idea not in needles:
+            needles[idea] = ("refused by the integrated field — the veto is "
+                             "a measurement")
+    closed = 0
+    for node in interbrain or []:
+        if node.get("status") != "open":
+            continue
+        note = needles.get(str(node.get("idea") or ""))
+        if note is None:
+            continue
+        node["status"] = "complete"
+        node["completed_by"] = "council"
+        node["completion"] = note
+        closed += 1
+    return {"closed_now": closed,
+            "open_now": sum(1 for n in (interbrain or [])
+                            if n.get("status") == "open")}
+
+
 def _seed_ideas(state: dict, *, curiosity_map: dict, self_model: dict) -> None:
     """Seed the Market of Ideas from the thinnest knowledge and the weaknesses.
 
@@ -1689,6 +1727,14 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
                            "bias_audit": {}, "minds": {}, "weights": {},
                            "affects": {}, "packages_detail": [], "vetoes": [],
                            "kelly": [], "packages": 0}
+    # R153 — THE DIGESTION, WIRED: the interbrain digests what the night
+    # measured — the forged ideas close on their outcome, the refused ones
+    # on the field's verdict. The registry learns to swallow; the digestion
+    # becomes a number the network digest already speaks.
+    _digest = _digest_interbrain(
+        store_state.setdefault("interbrain", []),
+        settles=(economy_block or {}).get("settles") or [],
+        refusals=one_brain_block.get("refusals") or [])
     # The playground's play slots (Vygotsky: try a role with NO capital at risk)
     # join the queue so the body actually plays them. Bounded: the play item carries
     # its ``ts``, so dedup alone never fires across nights — an unbounded queue

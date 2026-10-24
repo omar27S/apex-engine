@@ -229,6 +229,65 @@ def revisitation(agent: str, *, yesterday: dict, today: dict) -> list[dict]:
     return out
 
 
+def family_transitions(yesterday: list[str], today: list[str],
+                       *, condemned: list[str] | None = None) -> dict:
+    """R153 — THE THREE VERBS: the world's families are born, die and return.
+
+    The belief ledger once knew a single verb for the world's families —
+    "move" — so a set that replaced three quarters of its members read as one
+    string that moved (the Dragon's fourth black hole: an unregistered
+    resurrection is more dangerous than an unregistered death, because it
+    inflates confidence — yesterday's "4 families" and today's look like ONE
+    story while they are two different worlds). Now every family transition
+    carries its verb and its cause, and the two honest numbers ride beside:
+
+    * ``vitality = births / (births + deaths + resurrections)`` — None when
+      the night measured no transition at all (an honest silence, never a
+      fake 1.0);
+    * ``continuity = |S_t & S_{t-1}| / |S_t | S_{t-1}|`` — the Jaccard of
+      the two worlds (None only when both sides are empty; a world born
+      tonight carries an honest 0.0, never a None that hides the birth).
+    """
+    y = [str(f) for f in (yesterday or [])]
+    t = [str(f) for f in (today or [])]
+    dead_pool = {str(f) for f in (condemned or [])}
+    rows: list[dict] = []
+    for fam in sorted(set(t) - set(y)):
+        if fam in dead_pool:
+            row = belief_entry(
+                agent="council", before="(condemned)", after=fam,
+                reason=(f"{fam} re-enters the running rows after E4 condemned "
+                        "it — the dead walked back in while the gravedigger "
+                        "wrote (the factory still carries the condemned)"))
+            row["verb"] = "resurrezione"
+        else:
+            row = belief_entry(
+                agent="council", before="(none)", after=fam,
+                reason=(f"{fam} enters the running rows — a family the world "
+                        "had not measured yesterday"))
+            row["verb"] = "nascita"
+        row["family"] = fam
+        rows.append(row)
+    for fam in sorted(set(y) - set(t)):
+        row = belief_entry(
+            agent="council", before=fam, after="(retracted)",
+            reason=(f"{fam} left the running rows — no body of this family "
+                    "was measured tonight"))
+        row["verb"] = "morte"
+        row["family"] = fam
+        rows.append(row)
+    births = sum(1 for r in rows if r.get("verb") == "nascita")
+    deaths = sum(1 for r in rows if r.get("verb") == "morte")
+    resurrections = sum(1 for r in rows if r.get("verb") == "resurrezione")
+    denom = births + deaths + resurrections
+    vitality = round(births / denom, 4) if denom else None
+    union = set(y) | set(t)
+    continuity = round(len(set(y) & set(t)) / len(union), 4) if union else None
+    return {"rows": rows, "births": births, "deaths": deaths,
+            "resurrections": resurrections, "vitality": vitality,
+            "continuity": continuity}
+
+
 # --- FACULTY 2 — SYSTEM 1: the intuitive mind ------------------------------
 
 def remember_pattern(library: list[dict], *, agent: str, shape: str,

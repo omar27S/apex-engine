@@ -1390,6 +1390,20 @@ def one_brain_lines(civ: dict | None) -> list[str]:
                      f"({b.get('reason')})")
     else:
         L.append("  - nessun cambio di convinzione: le credenze tengono.")
+    # R153 — THE THREE VERBS, SAID ALOUD: the world's families speak their
+    # transitions — a birth, a death, or (the alarm) a RESURRECTION of a
+    # family E4 had condemned. The pulse rides the one-brain block; the
+    # Letter says it so the CEO can hear the dead walking back in.
+    _fp = ob.get("family_pulse") or {}
+    if _fp:
+        _v2, _c2 = _fp.get("vitality"), _fp.get("continuity")
+        L.append("  I tre verbi del mondo (famiglie): "
+                 f"{_fp.get('births', 0)} nascita/e, {_fp.get('deaths', 0)} "
+                 f"morte/i, {_fp.get('resurrections', 0)} resurrezione/i "
+                 f"(condannate E4 rientrate nelle righe vive) — vitalita' "
+                 f"{'non misurata' if _v2 is None else format(_v2, '.2f')}, "
+                 f"continuita' "
+                 f"{'non misurata' if _c2 is None else format(_c2, '.2f')}.")
     L.append("")
 
     # IL MODELLO DEL MONDO.

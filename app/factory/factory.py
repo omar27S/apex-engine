@@ -92,6 +92,11 @@ class FactoryConfig:
     # The stairstep's cheap pair for round 1 (must be in the universe).
     screen_pair: str = ""
     island: str = "heart"
+    # R153 — THE RETIREMENT THAT REACHES THE GENE POOL (E4 honored at the
+    # draw, the door, the flood and the cradle): families the Council
+    # condemned are no longer manufactured. An empty tuple (the default)
+    # leaves every stream byte-identical — the honest default.
+    retired_families: tuple[str, ...] = ()
     # THE DRAGON'S DIRECTED MUTATIONS (the dominant intelligence guides evolution):
     # a tuple of ``{family, gene, direction, reason}`` hypotheses that nudge the
     # surviving genomes toward a chosen bound. Empty -> blind evolution as before.
@@ -401,7 +406,10 @@ def _draw_gated(config: FactoryConfig, rng, *, concrete: bool):
     """
     paused = _paused_groups(config)
     active = _active_groups(config)
-    if not paused and not active:
+    # R153 — THE RETIREMENT: the dead are not drawn again. An empty retired
+    # set (the default) leaves this function byte-identical to before.
+    retired = {str(f) for f in (config.retired_families or ())}
+    if not paused and not active and not retired:
         return breeding.random_genome(
             rng, concrete=concrete, ensemble_quota=config.ensemble_quota,
             layers_quota=config.layers_quota)
@@ -409,12 +417,22 @@ def _draw_gated(config: FactoryConfig, rng, *, concrete: bool):
         g = breeding.random_genome(
             rng, concrete=concrete, ensemble_quota=config.ensemble_quota,
             layers_quota=config.layers_quota)
+        if str(g.family) in retired:
+            continue  # R153 — the retirement: the dead are not drawn again
         grp = _group_of(g.family)
         if grp in paused:
             continue  # paused on some pair -- redraw
         if active and grp not in active and rng.random() < ACTIVE_BOOST:
             continue  # prioritise active groups (a soft boost, not a hard block)
         return g
+    if retired:
+        # The bounded retries ran out: draw EXPLICITLY from the living
+        # families, so the honest fallback can never smuggle a corpse
+        # through the door.
+        living = [f for f in breeding.eligible_families() if f not in retired]
+        if living:
+            return breeding.random_genome(
+                rng, family=living[int(rng.integers(len(living)))])
     return breeding.random_genome(
         rng, concrete=concrete, ensemble_quota=config.ensemble_quota,
         layers_quota=config.layers_quota)
@@ -424,7 +442,16 @@ def _gating_block(config: FactoryConfig, population) -> dict:
     """The honest gating report: paused/active groups + the population's respect."""
     paused = _paused_groups(config)
     active = _active_groups(config)
+    retired = sorted({str(f) for f in (config.retired_families or ())})
     if not config.regime_gating:
+        if retired:
+            # R153 — THE OBITUARY: the retirement speaks even when the tower
+            # said nothing — the factory reports WHO it no longer draws.
+            return {"applied": True, "paused": [], "active": [],
+                    "retired": retired, "n_paused_offered": 0,
+                    "n_active_offered": 0, "pairs": 0,
+                    "reading": (f"il ritiro E4 e' onorato: la fabbrica non "
+                                f"pesca piu' {', '.join(retired)}")}
         return {"applied": False, "paused": [], "active": [],
                 "n_paused_offered": 0, "n_active_offered": 0, "pairs": 0,
                 "reading": "nessun gating di regime (la torre non ha riconfigurato)"}
@@ -433,6 +460,7 @@ def _gating_block(config: FactoryConfig, population) -> dict:
     n_active = sum(1 for g in offered if _group_of(g.family) in active)
     return {
         "applied": True, "paused": sorted(paused), "active": sorted(active),
+        "retired": retired,
         "pairs": len(config.regime_gating),
         "n_paused_offered": n_paused, "n_active_offered": n_active,
         "n_population": len(offered),
@@ -566,6 +594,12 @@ def run_factory(universe, config: FactoryConfig, *,
     _births: list[gene_mod.Birth] = []
     _brake = {"applied": False, "sibling_mates_avoided": 0,
               "immigrants": 0, "reason": "il sangue era diversificato"}
+    # R153 — THE RETIREMENT: the Council's E4 verdicts, honored by the gene
+    # pool itself — the condemned are not drawn, not re-seeded, not re-bred.
+    # No retired set -> every stream stays byte-identical (the honest default).
+    _retired = {str(f) for f in (config.retired_families or ())}
+    retired_refused = 0
+    retired_children_redrawn = 0
     # R143 -- THE GENE FLOOD's SEED: the one-blood streak is a PERSISTENT blood
     # measurement.  The previous run's genealogy artifact carries where the
     # collapse stood; a torn, absent, or pre-flood artifact is a fresh streak
@@ -591,7 +625,9 @@ def run_factory(universe, config: FactoryConfig, *,
         except Exception:
             paused = set()
         return [f for f in breeding.eligible_families()
-                if _group_of(f) not in (paused or set())]
+                if _group_of(f) not in (paused or set())
+                # R153 — the flood does not resurrect the condemned.
+                and f not in _retired]
 
     def _sight(g, op: str = "seed", parents: tuple = ()) -> None:
         sig = str(g.signature())
@@ -640,6 +676,14 @@ def run_factory(universe, config: FactoryConfig, *,
         _pool, champions_refused = dna_mod.honest_champions(_pool)
         _ungated = []
         for m in _pool:
+            # R153 — THE RETIREMENT AT THE DOOR: a condemned family's past
+            # champions are memories, not residents — refused and counted,
+            # the same honest door the paused groups already had. This was
+            # the resurrection's main gate: the pantry re-seeded the dead
+            # every night while the gravedigger wrote.
+            if str(m.get("family") or "") in _retired:
+                retired_refused += 1
+                continue
             if _gated_out(m):
                 gated_own += 1
                 continue
@@ -980,6 +1024,14 @@ def run_factory(universe, config: FactoryConfig, *,
                 _births.append(gene_mod.Birth(
                     child=str(child.signature()), op="mutate",
                     parents=(str(parent.signature()),)))
+            # R153 — THE RETIREMENT AT THE CRADLE: mutation can flip a
+            # child INTO a condemned family — a newborn corpse is still a
+            # corpse. The child is refused and a fresh hunter takes the slot
+            # (counted, never silent: the cradle reports what it refused).
+            if _retired and str(child.family) in _retired:
+                child = _draw_gated(config, rng, concrete=False)
+                retired_children_redrawn += 1
+                _sight(child, op="retired_redraw")
             # R71a — draw a few genes from the survivors' distribution.
             genes = child.to_dict()
             moved = False
@@ -1377,7 +1429,12 @@ def run_factory(universe, config: FactoryConfig, *,
                        "snapshot": eda_mem.snapshot()},
         "directed": {**directed_stats,
                      "n_directives": len(directed_idx)},
-        "regime_gating": _gating_block(config, population),
+        "regime_gating": {**_gating_block(config, population),
+                          # R153 — the retirement's honest counters: how many
+                          # condemned champions were refused at the door, how
+                          # many flipped children were redrawn at the cradle.
+                          "retired_refused": retired_refused,
+                          "retired_children_redrawn": retired_children_redrawn},
         "polish": {
             "newborns": len(polish_deltas),
             "improved": sum(1 for d in polish_deltas if d["delta"] > 0),

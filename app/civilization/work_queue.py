@@ -196,25 +196,40 @@ def from_council(decisions: list[dict], *, ts: str = "") -> list[dict]:
     """
     out: list[dict] = []
     for d in decisions or []:
+        # R153 — THE FAMILY IN THE HAND: the Council's decisions carry their
+        # family/trials inside ``extra`` (the flattened extras ride the
+        # ledger row); the block the daemon reads once dropped them, so
+        # every cure ran as "treatment for the family ?" with the default
+        # slice — the hand did not know whom it was treating.
+        _ex = d.get("extra") or {}
         if d.get("kind") == "forge_burst":
             trials = d.get("trials")
+            if trials is None:
+                trials = _ex.get("trials")
+            idea = d.get("idea") or _ex.get("idea")
             out.append(work_item(
                 "council_burst", what=d.get("what", "council burst"),
                 why=d.get("why", "the Council decided"), weight=-1,
                 source="council", ts=(d.get("ts") or ts),
-                extra={"trials": trials, "idea": d.get("idea")}))
+                extra={"trials": trials, "idea": idea}))
         elif d.get("kind") == "cure_family":
             # R147 — the treatment burst: a cure that never touches the queue
             # cured nothing. Bounded (the hunch's look, 200 trials) and deduped
             # by the daemon's whole-item check while it stays pending.
+            _fam = d.get("family") or _ex.get("family")
+            _trials = d.get("trials")
+            if _trials is None:
+                _trials = _ex.get("trials")
+            _course = d.get("course") or _ex.get("course")
+            _what = f"treatment for the family {_fam or '?'}"
             out.append(work_item(
                 "council_burst",
-                what=f"treatment for the family {d.get('family', '?')}",
+                what=_what,
                 why=str(d.get("why") or "the Council decided"),
                 weight=-1, source="council", ts=(d.get("ts") or ts),
-                extra={"trials": int(d.get("trials") or 200),
-                       "idea": f"treatment for the family {d.get('family', '?')}",
-                       "family": d.get("family"), "course": d.get("course"),
+                extra={"trials": int(_trials or 200),
+                       "idea": _what,
+                       "family": _fam, "course": _course,
                        "treatment": True}))
     return out
 

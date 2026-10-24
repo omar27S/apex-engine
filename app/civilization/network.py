@@ -103,7 +103,8 @@ def discover(bus: list[dict], *, sender: str, body: str, ts: str = "") -> Messag
 
 
 def post_idea(interbrain: list[dict], *, author: str, idea: str,
-              parents: list[str] | None = None, ts: str = "") -> dict:
+              parents: list[str] | None = None, ts: str = "",
+              closes_when: str = "") -> dict:
     """Put a half-formed idea into the shared working memory (the interbrain).
 
     ``parents`` names the ideas this one builds on — an idea may have MULTIPLE
@@ -116,6 +117,10 @@ def post_idea(interbrain: list[dict], *, author: str, idea: str,
         "parents": list(parents or []),
         "status": "open",
         "completed_by": None,
+        # R153 — THE DIGESTION: an idea is born with its own death sentence
+        # written ("closes_when") — an idea without a closing condition is
+        # noise with good handwriting (the Dragon's second black hole).
+        "closes_when": closes_when,
     }
     interbrain.append(node)
     return node
@@ -139,15 +144,25 @@ def network_digest(bus: list[dict], interbrain: list[dict]) -> dict:
     for m in bus:
         by_kind[m.get("kind", "?")] = by_kind.get(m.get("kind", "?"), 0) + 1
     open_ideas = [n for n in interbrain if n.get("status") != "complete"]
+    # R153 — THE DIGESTION: the registry once held 232 voices, all "open",
+    # zero closed — a house that only accumulated attention. The digestion
+    # is the honest number: of the ideas born, how many were MEASURED to a
+    # close (delivered, refused, no survivor). None when nothing was born.
+    complete_ideas = [n for n in interbrain if n.get("status") == "complete"]
+    digestion = (round(len(complete_ideas) / len(interbrain), 4)
+                 if interbrain else None)
     return {
         "messages": len(bus),
         "by_kind": by_kind,
         "ideas": len(interbrain),
         "open_ideas": len(open_ideas),
+        "digested_ideas": len(complete_ideas),
+        "digestion": digestion,
         "multi_parent_ideas": sum(1 for n in interbrain if len(n.get("parents", [])) > 1),
         "reading": (f"{len(bus)} message(s) on the bus ({by_kind}); "
                     f"{len(interbrain)} idea(s) in the interbrain, "
-                    f"{len(open_ideas)} open"),
+                    f"{len(open_ideas)} open, {len(complete_ideas)} digested "
+                    f"(digestion: {digestion})"),
     }
 
 

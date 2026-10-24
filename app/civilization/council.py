@@ -55,6 +55,14 @@ CURE_FAILURES: int = 3
 # cure attempts; after the course is exhausted with no survivor, the E4 verdict
 # takes the seat (retire the weak by data, a king-child in light mutation fills it).
 CURE_COURSE: int = 2
+# R153 — THE FRICTION-PROPORTIONAL COURSE (the Sage's provoke: rsi_divergence
+# retired with 179 failures and 2 cures, ml_gradient_boosting with 47 failures
+# and 12 — the cure budget was never proportional to the friction it was
+# asked to heal; haste with E4's handwriting, the debt cancelled not paid).
+# Every FRICTION_PER_CURE adversary-tested failures buy one more cure, so
+# the family with the RICHEST evidence of sickness earns the LONGEST course.
+FRICTION_PER_CURE: int = 40
+CURE_COURSE_MAX: int = 6
 # R147 — THE HONORED VETO (the Sage's warning): a refusal by the One Brain is
 # E9 WORKING — a measurement of the field, not an obstacle to force. An idea the
 # field refused is NOT re-forged into the same burst for this long; only NEW
@@ -100,6 +108,18 @@ def burst_size(attention: float, *, capacity_trials: int | None = None) -> int:
     return trials
 
 
+def course_for_failures(fails: int) -> int:
+    """R153 — the friction-proportional course: bounded, monotone, honest.
+
+    Two cures for the barely-sick (the historical floor), one more for every
+    forty adversary-tested failures, six at most — a course that scales with
+    the evidence and never forgets to end.
+    """
+    fails = max(0, int(fails or 0))
+    return max(CURE_COURSE, min(CURE_COURSE_MAX,
+                                CURE_COURSE + fails // FRICTION_PER_CURE))
+
+
 def _cure_decisions(world: dict) -> list[dict]:
     """Cure the sick — with a COURSE, then retire them (E4). R147.
 
@@ -118,15 +138,21 @@ def _cure_decisions(world: dict) -> list[dict]:
         if not (fails >= CURE_FAILURES and survivors == 0):
             continue
         n = int(cures.get(family) or 0)
-        if n < CURE_COURSE:
+        # R153 — the course scales with the measured friction: the
+        # patient with the most defeats earns the most treatment, never
+        # the least (the Sage's provoke, healed).
+        course = course_for_failures(fails)
+        if n < course:
             out.append(L.decision_entry(
                 kind="cure_family",
                 what=f"cure the family {family}",
                 why=(f"{fails} adversary-tested failures and no certified survivor — "
-                     f"cure {n + 1} of {CURE_COURSE} for this family: the treatment "
+                     f"cure {n + 1} of {course} for this family (the course scales "
+                     f"with the friction: {fails} failures earn {course} cures): "
+                     "the treatment "
                      f"changes with the patient, and a course that ends without a "
                      f"survivor retires the family (E4), it never restarts"),
-                evidence=f"failures={fails}, survivors={survivors}, course={n + 1}/{CURE_COURSE}",
+                evidence=f"failures={fails}, survivors={survivors}, course={n + 1}/{course}",
                 expected_effect="a targeted treatment burst measures whether this "
                                 "family can still produce a survivor",
                 extra={"family": family, "course": n + 1, "trials": MIN_BURST_TRIALS}))
@@ -135,7 +161,8 @@ def _cure_decisions(world: dict) -> list[dict]:
                 kind="retire_family",
                 what=f"retire the family {family}",
                 why=(f"{fails} adversary-tested failures, 0 survivors and a full "
-                     f"course of {n} cure(s) that changed nothing — E4: retire the "
+                     f"course of {n} cure(s) — friction-proportional, {fails} "
+                     f"failures earned {course} — that changed nothing — E4: retire the "
                      f"weak by data and give the seat to a king-child in light "
                      f"mutation; reanimating a certified death is not research, it "
                      f"is the {fails + 1}st defeat disguised as hope"),

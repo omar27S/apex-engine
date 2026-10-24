@@ -220,6 +220,9 @@ def letter_metrics(report: dict, *, civilization: dict | None = None,
     for k, v in (d.get("stats") or {}).items():
         if v is not None and v != "":
             st[k] = v
+    # R157 — THE TAPE'S PRECEDENCE: after the diary's say, the tape re-asserts
+    # its crown (the diary speaks for the civilization, never for the account).
+    st = bl.reassert_the_tape(st, r)
 
     death = r.get("death_causes") or {}
     finalists = r.get("finalists")
@@ -713,6 +716,9 @@ def build_morning_letter(report: dict, *, civilization: dict | None = None,
     for k, v in (d.get("stats") or {}).items():
         if v is not None and v != "":
             st[k] = v
+    # R157 — THE TAPE'S PRECEDENCE: after the diary's say, the tape re-asserts
+    # its crown (the diary speaks for the civilization, never for the account).
+    st = bl.reassert_the_tape(st, r)
 
     # W4 (the young ledger): when the account's memory of pain holds fewer than
     # 7 nights, the deployable fraction built on it is a MEASURED number on a

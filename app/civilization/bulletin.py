@@ -130,6 +130,37 @@ def _mean_pct(vals):
     return round(sum(vals) / len(vals), 4)
 
 
+# R157 — THE TAPE'S PRECEDENCE: the crown's keys are the TAPE's account --
+# stamped on the report by the tournament that read the mouth's ledger. The
+# civilization's diary may carry a copy (for its own rendering), but it must
+# never SPEAK for the account: a stale "measured" copy (dispatched_trades: 0
+# from a pre-live night) censored the live count in the 14:50 letter, exactly
+# what R156 swore could never happen. These keys belong to the report alone.
+TAPE_CROWN_KEYS = {
+    "paper_r": "paper_from_finalists_r",
+    "crown_basis": "basis",
+    "dispatched_trades": "dispatched_trades",
+    "live_resolved": "live_resolved",
+    "dispatch_r": "realized_from_dispatch_r",
+    "live_dd_r": "live_dd_r",
+}
+
+
+def reassert_the_tape(st: dict, report: dict) -> dict:
+    """The report's crown block is the ONLY authority for the crown's keys.
+
+    Where the crown carries a value (a real 0 included), it wins over the
+    diary's memory of an older crown; where the report has no crown at all,
+    the keys fall silent (None) -- the account never speaks from memory. The
+    diary speaks for the civilization (population, kings, births); never
+    for the tape.
+    """
+    crown = ((report or {}).get("measured_dd") or {}).get("crown")
+    for st_key, crown_key in TAPE_CROWN_KEYS.items():
+        st[st_key] = crown.get(crown_key) if isinstance(crown, dict) else None
+    return st
+
+
 def statistics_from(report: dict, *, volume=None, history=None,
                     friction_target: float = 3.0) -> dict:
     """The complete statistics block, read from the report (honest, never invented).
@@ -435,6 +466,9 @@ def build_bulletin_v3(report: dict, *, civilization: dict | None = None,
     body = body or {}
     queue = queue or {}
     st = d.get("stats") or statistics_from(r, history=history)
+    # R157 — THE TAPE'S PRECEDENCE: the page renders the account from the
+    # report's crown, never from the diary's copy of an older one.
+    st = reassert_the_tape(st, r)
 
     L: list[str] = []
     L.append("# APEX -- BOLLETTINO NOTTURNO (il diario della civilta')")

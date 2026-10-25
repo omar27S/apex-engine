@@ -19,6 +19,7 @@ import hashlib
 from app.civilization import career as career_mod
 from app.civilization import council as council_mod  # noqa: E402
 from app.civilization import gaze, mind, one_brain, playground
+from app.civilization.sage import _now  # R159 — the cycle owns a clock
 
 __all__ = ["run_one_brain", "minds_from_report", "TITANIUM_FLOOR"]
 
@@ -254,6 +255,11 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
                                               "patterns": [], "generations": [],
                                               "refusals": []})
     ob.setdefault("refusals", [])
+    # R159 — THE REGISTERED TIME: the cycle owns a clock. A caller that passes
+    # no ts no longer writes undated registers — the world model and the
+    # belief ledger were being born with ts: "" (a register that does not
+    # know when it happened is a story, not a record).
+    ts = str(ts or _now())
     version = int(ob.get("version", 0)) + 1
 
     # --- the minds, their affects, and the reliability-weighted field ---------
@@ -322,7 +328,8 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
     today = {"model.belief": model.get("belief"),
              "model.pairs": ",".join(model.get("pairs", []))}
     ob["belief_ledger"] = (ob.get("belief_ledger") or []) + \
-        mind.revisitation("council", yesterday=yesterday, today=today)
+        mind.revisitation("council", yesterday=yesterday, today=today,
+                          ts=ts, version=version)
     ob["last_model_belief"] = today
     # R153 — THE THREE VERBS: the world's families get their verbs. A family
     # set that changes three quarters of its members is not a string that
@@ -333,7 +340,8 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
               if f]
     family_pulse = mind.family_transitions(
         _yfams, list(model.get("pairs") or []),
-        condemned=_condemned_families(store_state.get("ledger") or []))
+        condemned=_condemned_families(store_state.get("ledger") or []),
+        ts=ts, version=version)
     ob["belief_ledger"] = (ob.get("belief_ledger") or []) + family_pulse["rows"]
     _v, _c = family_pulse.get("vitality"), family_pulse.get("continuity")
     family_pulse["reading"] = (
@@ -341,6 +349,11 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         f"{family_pulse['resurrections']} resurrezione/i — vitalita' "
         f"{'non misurata' if _v is None else format(_v, '.2f')}, continuita' "
         f"{'non misurata' if _c is None else format(_c, '.2f')}")
+    # R159 — THE REGISTERED TIME: persistenza — the median LIFE of the world's
+    # beliefs. A civilization that changes its mind without paying registered
+    # time does not believe: it fluctuates (the Dragon's seventh wound).
+    family_pulse["persistence"] = mind.belief_persistence(
+        ob.get("belief_ledger") or [])
 
     # --- the decisions (with a soul) + the veto + the Kelly voice ------------
     supporters = sorted([f for f, m in minds.items()

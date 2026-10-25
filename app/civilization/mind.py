@@ -140,15 +140,20 @@ def retire_theories(theories: list[dict], retired: list[dict],
 
 
 def belief_entry(*, agent: str, before: str, after: str, reason: str,
-                 ts: str = "") -> dict:
+                 ts: str = "", version: int | None = None) -> dict:
     """One BELIEF LEDGER row: what the agent believed, what it believes now, why.
 
     A belief change with no reason is not a change of mind — it is noise; refused.
+    R159 — THE REGISTERED TIME: the row may carry the world's version AT the
+    change — a register that knows when it happened AND at which world.
     """
     if not str(reason).strip():
         raise ValueError("a belief change with no reason is noise, not a revision")
-    return {"ts": ts, "agent": str(agent), "before": str(before),
-            "after": str(after), "reason": str(reason)}
+    row = {"ts": ts, "agent": str(agent), "before": str(before),
+           "after": str(after), "reason": str(reason)}
+    if version is not None:
+        row["version_at_change"] = int(version)
+    return row
 
 
 def belief_day_counts(rows: list[dict], *, day: str) -> dict:
@@ -205,7 +210,8 @@ def belief_vitality(counts: dict) -> float | None:
     return round(births / over, 4)
 
 
-def revisitation(agent: str, *, yesterday: dict, today: dict) -> list[dict]:
+def revisitation(agent: str, *, yesterday: dict, today: dict,
+                 ts: str = "", version: int | None = None) -> list[dict]:
     """The nightly revisitation: what did I believe yesterday that today contradicts?
 
     Compares two belief snapshots (``{belief_key: value}``). A key whose value
@@ -219,18 +225,22 @@ def revisitation(agent: str, *, yesterday: dict, today: dict) -> list[dict]:
             continue
         if after is None:
             out.append(belief_entry(agent=agent, before=str(before), after="(retracted)",
-                                    reason=f"today's data no longer carries {key}"))
+                                    reason=f"today's data no longer carries {key}",
+                                    ts=ts, version=version))
         elif before is None:
             out.append(belief_entry(agent=agent, before="(none)", after=str(after),
-                                    reason=f"today's data newly carries {key}"))
+                                    reason=f"today's data newly carries {key}",
+                                    ts=ts, version=version))
         else:
             out.append(belief_entry(agent=agent, before=str(before), after=str(after),
-                                    reason=f"{key} moved from {before} to {after}"))
+                                    reason=f"{key} moved from {before} to {after}",
+                                    ts=ts, version=version))
     return out
 
 
 def family_transitions(yesterday: list[str], today: list[str],
-                       *, condemned: list[str] | None = None) -> dict:
+                       *, condemned: list[str] | None = None,
+                       ts: str = "", version: int | None = None) -> dict:
     """R153 — THE THREE VERBS: the world's families are born, die and return.
 
     The belief ledger once knew a single verb for the world's families —
@@ -258,13 +268,15 @@ def family_transitions(yesterday: list[str], today: list[str],
                 agent="council", before="(condemned)", after=fam,
                 reason=(f"{fam} re-enters the running rows after E4 condemned "
                         "it — the dead walked back in while the gravedigger "
-                        "wrote (the factory still carries the condemned)"))
+                        "wrote (the factory still carries the condemned)"),
+                ts=ts, version=version)
             row["verb"] = "resurrezione"
         else:
             row = belief_entry(
                 agent="council", before="(none)", after=fam,
                 reason=(f"{fam} enters the running rows — a family the world "
-                        "had not measured yesterday"))
+                        "had not measured yesterday"),
+                ts=ts, version=version)
             row["verb"] = "nascita"
         row["family"] = fam
         rows.append(row)
@@ -272,7 +284,8 @@ def family_transitions(yesterday: list[str], today: list[str],
         row = belief_entry(
             agent="council", before=fam, after="(retracted)",
             reason=(f"{fam} left the running rows — no body of this family "
-                    "was measured tonight"))
+                    "was measured tonight"),
+            ts=ts, version=version)
         row["verb"] = "morte"
         row["family"] = fam
         rows.append(row)
@@ -286,6 +299,53 @@ def family_transitions(yesterday: list[str], today: list[str],
     return {"rows": rows, "births": births, "deaths": deaths,
             "resurrections": resurrections, "vitality": vitality,
             "continuity": continuity}
+
+
+
+
+from datetime import datetime as _dt
+
+
+def _parse_ts(stamp: str):
+    return _dt.fromisoformat(str(stamp).replace("Z", "+00:00"))
+
+def belief_persistence(rows: list[dict]) -> dict:
+    """R159 — THE REGISTERED TIME: the median LIFE of a belief, in days.
+
+    The ledger counted the changes of mind; it never said how long each
+    belief had LIVED (the Dragon, letter of 2026-10-25: "senza tempo,
+    l'oscillazione e' indistinguibile dall'evoluzione — chi si pente gratis
+    non impara mai"). A life is a family's span from its birth (or its
+    resurrection) to its death, both stamped with ts. Rows without a usable
+    ts are not measured — an honest silence, never a fabricated median.
+    """
+    lives: list[float] = []
+    born: dict[str, str] = {}
+    for r in rows or []:
+        fam = str(r.get("family") or "")
+        verb = str(r.get("verb") or "")
+        stamp = str(r.get("ts") or "")
+        if not fam or not stamp:
+            continue
+        if verb in ("nascita", "resurrezione"):
+            born[fam] = stamp
+        elif verb == "morte" and fam in born:
+            origin = born.pop(fam)
+            try:
+                t0 = _parse_ts(origin)
+                t1 = _parse_ts(stamp)
+            except ValueError:
+                continue
+            days = (t1 - t0).total_seconds() / 86400.0
+            if days >= 0:
+                lives.append(days)
+    if not lives:
+        return {"measured": False, "median_days": None, "n": 0}
+    lives.sort()
+    mid = len(lives) // 2
+    median = (lives[mid] if len(lives) % 2
+              else (lives[mid - 1] + lives[mid]) / 2.0)
+    return {"measured": True, "median_days": round(median, 2), "n": len(lives)}
 
 
 # --- FACULTY 2 — SYSTEM 1: the intuitive mind ------------------------------

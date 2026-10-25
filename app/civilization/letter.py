@@ -916,6 +916,14 @@ def build_morning_letter(report: dict, *, civilization: dict | None = None,
 
     # 5g) IL POLSO (Part Three): the collective pulse, its trend, and the engagement.
     if lf.get("pulse"):
+        # R159 — THE REGISTERED TIME: the experience density — witnessed
+        # cycles over lived cycles (the honest clock of a learning world).
+        _dexp = civ.get("diary") if isinstance(civ.get("diary"), dict) else {}
+        _exp = civ.get("experience") or _dexp.get("experience") or {}
+        if _exp.get("reading"):
+            L.append("**L'esperienza (il tempo registrato).**")
+            L.append(f"  - densità: {_exp.get('reading')}")
+            L.append("")
         L.append("**Il polso.**")
         L.append(f"  - {lf['pulse'].get('reading')}")
         if lf.get("pulse_trend"):
@@ -1446,6 +1454,12 @@ def one_brain_lines(civ: dict | None) -> list[str]:
                  f"{'non misurata' if _v2 is None else format(_v2, '.2f')}, "
                  f"continuita' "
                  f"{'non misurata' if _c2 is None else format(_c2, '.2f')}.")
+        _pers = _fp.get("persistence") or {}
+        if _pers.get("measured"):
+            L.append("  Il tempo delle credenze: persistenza mediana "
+                     f"{_pers.get('median_days'):.1f} giorni su "
+                     f"{_pers.get('n')} vita/e misurate — cambiare idea "
+                     "costa tempo registrato.")
     L.append("")
 
     # IL MODELLO DEL MONDO.

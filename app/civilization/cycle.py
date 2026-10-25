@@ -1666,7 +1666,14 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     # meeting (~8x/day), double-counting experience in the dream's index. An
     # undated report (pre-R146 history) folds best-effort, as before.
     fold_day = str(night_report.get("date") or "")
-    if episodes and (not fold_day or fold_day != store_state.get("episodes_from")):
+    # R159 — THE REGISTERED TIME: a meeting that folds a night it had never
+    # folded is a WITNESS — a cycle that consumed new evidence, not
+    # wall-clock. The density of witnesses separates a civilization that
+    # learns from one that merely turns (110 cycles of age are not 110
+    # cycles of experience — the Dragon's eighth wound).
+    witnessed_night = bool(
+        episodes and (not fold_day or fold_day != store_state.get("episodes_from")))
+    if witnessed_night:
         store_state["episodes"] = (list(store_state.get("episodes") or []) +
                                    list(episodes))[-500:]
         if fold_day:
@@ -2137,6 +2144,9 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     # 7. update the self-model and the cycle counter.
     store_state["self_model"] = selfm
     store_state["cycles"] += 1
+    if witnessed_night:
+        store_state["witnessed_cycles"] = int(
+            store_state.get("witnessed_cycles") or 0) + 1
 
     # 8. assemble the diary block the night bulletin (v3) prints.
     diary = _diary(night_report, store_state, selfm, cmap, session, agents)
@@ -2148,6 +2158,12 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
     diary["ancestry"] = ancestry
     diary["standing_orders"] = list(store_state.get("standing_orders") or [])
     diary["gaze"] = gaze_block
+    # R159 — THE REGISTERED TIME: the experience density rides the diary —
+    # witnessed cycles over lived cycles. The census may no longer call
+    # age what is only waiting.
+    diary["experience"] = experience_reading(
+        cycles=int(store_state.get("cycles") or 0),
+        witnessed=int(store_state.get("witnessed_cycles") or 0))
     diary["life"] = life
     diary["sage"] = sage_block
     diary["dragon"] = dragon_block
@@ -2418,6 +2434,33 @@ def _gaze(state: dict, *, night_report: dict, agents: list[str], ts: str,
                     f"su {pair}; {recognition.get('reading')}; {patrol_reading}"),
     }
 
+
+
+def experience_reading(*, cycles: int, witnessed: int, min_cycles: int = 10,
+                       quiet_below: float = 0.10, slow_below: float = 0.25) -> dict:
+    """R159 — THE REGISTERED TIME: the honest density of experience.
+
+    ``density = witnessed / cycles`` once the world is old enough to be
+    judged (below ``min_cycles`` the reading is an honest "not measured",
+    never a premature verdict). Below one witness in ten the census reads
+    "civiltà ferma": the time passes, the proof does not.
+    """
+    cycles = int(cycles or 0)
+    witnessed = int(witnessed or 0)
+    density = round(witnessed / cycles, 4) if cycles >= min_cycles else None
+    if density is None:
+        reading = f"non misurata (il mondo ha meno di {min_cycles} cicli)"
+    else:
+        head = (f"{witnessed} notte/i provata/e su {cycles} cicli "
+                f"({density:.1%}) — ")
+        if density < quiet_below:
+            reading = head + "civiltà ferma: il tempo passa, la prova no"
+        elif density < slow_below:
+            reading = head + "civiltà in moto lento"
+        else:
+            reading = head + "civiltà che impara dal nastro"
+    return {"cycles": cycles, "witnessed": witnessed, "density": density,
+            "reading": reading}
 
 def _diary(night_report: dict, state: dict, selfm: dict, cmap: dict,
            session: dict, agents: list[str]) -> dict:

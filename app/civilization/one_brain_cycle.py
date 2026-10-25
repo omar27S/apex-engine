@@ -240,14 +240,24 @@ def _market_model(night_report: dict, *, version: int, ts: str,
                                sessions=sessions, resilience=resilience,
                                version=version, ts=ts)
     if pairs:
-        belief = f"il mondo ha {len(pairs)} famiglia/e: {', '.join(pairs)}"
+        # R161 — THE EXECUTION: the tribunal's word becomes the world's
+        # arithmetic. The belief counts the LIVING — a condemned family that
+        # still runs is named as AWAITING EXECUTION, never counted among the
+        # families (the Dragon's seventh wound: "4 condannata/e su 4" cannot
+        # ride beside "il mondo ha 4 famiglie" — the sentence needs a verb).
+        condemned_running = sorted(set(condemned or []) & set(pairs))
+        living = [p for p in pairs if p not in set(condemned_running)]
         # R152 — THE GHOST CONDEMNED: the rows stay (they ran — the
         # factory's truth) and the CONDEMNATION is named beside them (the
         # Council's truth): the model holds both, never either alone.
-        condemned_running = sorted(set(condemned or []) & set(pairs))
+        if living:
+            belief = (f"il mondo ha {len(living)} famiglia/e viva/e: "
+                      f"{', '.join(living)}")
+        else:
+            belief = "il mondo non ha famiglie vive"
         if condemned_running:
-            belief += (f" — {len(condemned_running)} condannata/e (E4): "
-                       f"{', '.join(condemned_running)}")
+            belief += (f" — {len(condemned_running)} condannata/e in attesa "
+                       f"di esecuzione (E4): {', '.join(condemned_running)}")
         # R160 — THE REGIME'S VOICE: the belief names its context — WHICH world
         # measured these families (the live census) and WHICH part of the day
         # (the phase). A belief that hides its context is a verdict without a
@@ -376,11 +386,18 @@ def run_one_brain(store_state: dict, *, night_report: dict | None = None,
         ts=ts, version=version)
     ob["belief_ledger"] = (ob.get("belief_ledger") or []) + family_pulse["rows"]
     _v, _c = family_pulse.get("vitality"), family_pulse.get("continuity")
+    # R161 — THE EXECUTION: the pulse speaks the fourth verb and the
+    # tribunal's arithmetic (nomi_spariti / nomi_condannati) — a 0/4 that
+    # stays forever is visible from the first reading.
+    _pool = len(family_pulse.get("condemned_pool") or [])
+    _gone = _pool - len(family_pulse.get("still_condemned") or [])
+    _exread = f", esecuzione {_gone}/{_pool}" if _pool else ""
     family_pulse["reading"] = (
         f"{family_pulse['births']} nascita/e, {family_pulse['deaths']} morte/i, "
-        f"{family_pulse['resurrections']} resurrezione/i — vitalita' "
+        f"{family_pulse['resurrections']} resurrezione/i, "
+        f"{family_pulse.get('executions', 0)} esecuzione/i — vitalita' "
         f"{'non misurata' if _v is None else format(_v, '.2f')}, continuita' "
-        f"{'non misurata' if _c is None else format(_c, '.2f')}")
+        f"{'non misurata' if _c is None else format(_c, '.2f')}{_exread}")
     # R159 — THE REGISTERED TIME: persistenza — the median LIFE of the world's
     # beliefs. A civilization that changes its mind without paying registered
     # time does not believe: it fluctuates (the Dragon's seventh wound).

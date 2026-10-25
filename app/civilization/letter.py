@@ -1447,13 +1447,22 @@ def one_brain_lines(civ: dict | None) -> list[str]:
     _fp = ob.get("family_pulse") or {}
     if _fp:
         _v2, _c2 = _fp.get("vitality"), _fp.get("continuity")
-        L.append("  I tre verbi del mondo (famiglie): "
+        # R161 — THE EXECUTION: the fourth verb said aloud — the condemned
+        # that LEFT the rows (the sentence executed) beside the ones that
+        # walked back in, and the tribunal's arithmetic (spariti/condannati).
+        _pool = len(_fp.get("condemned_pool") or [])
+        _gone = _pool - len(_fp.get("still_condemned") or [])
+        _exread = f", esecuzione {_gone}/{_pool}" if _pool else ""
+        L.append("  I verbi del mondo (famiglie): "
                  f"{_fp.get('births', 0)} nascita/e, {_fp.get('deaths', 0)} "
                  f"morte/i, {_fp.get('resurrections', 0)} resurrezione/i "
-                 f"(condannate E4 rientrate nelle righe vive) — vitalita' "
+                 f"(condannate E4 rientrate nelle righe vive), "
+                 f"{_fp.get('executions', 0)} esecuzione/i (condannate uscite "
+                 f"dalle righe — la sentenza eseguita) — vitalita' "
                  f"{'non misurata' if _v2 is None else format(_v2, '.2f')}, "
                  f"continuita' "
-                 f"{'non misurata' if _c2 is None else format(_c2, '.2f')}.")
+                 f"{'non misurata' if _c2 is None else format(_c2, '.2f')}"
+                 f"{_exread}.")
         _pers = _fp.get("persistence") or {}
         if _pers.get("measured"):
             L.append("  Il tempo delle credenze: persistenza mediana "

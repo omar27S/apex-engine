@@ -281,24 +281,49 @@ def family_transitions(yesterday: list[str], today: list[str],
         row["family"] = fam
         rows.append(row)
     for fam in sorted(set(y) - set(t)):
-        row = belief_entry(
-            agent="council", before=fam, after="(retracted)",
-            reason=(f"{fam} left the running rows — no body of this family "
-                    "was measured tonight"),
-            ts=ts, version=version)
-        row["verb"] = "morte"
+        if fam in dead_pool:
+            # R161 — THE EXECUTION: a condemned family leaving the rows is not
+            # an absence — it is the SENTENCE EXECUTED. The death cites its
+            # judge (the Dragon's seventh wound: the retraction must carry the
+            # data that killed it; a tribunal whose sentence never becomes a
+            # verb is a comment, not a selection).
+            row = belief_entry(
+                agent="council", before=fam, after="(executed)",
+                reason=(f"{fam} left the running rows — E4's retirement "
+                        "executed: the tribunal condemned this family and the "
+                        "world no longer counts it (the sentence found its verb)"),
+                ts=ts, version=version)
+            row["verb"] = "esecuzione"
+        else:
+            row = belief_entry(
+                agent="council", before=fam, after="(retracted)",
+                reason=(f"{fam} left the running rows — no body of this family "
+                        "was measured tonight"),
+                ts=ts, version=version)
+            row["verb"] = "morte"
         row["family"] = fam
         rows.append(row)
     births = sum(1 for r in rows if r.get("verb") == "nascita")
     deaths = sum(1 for r in rows if r.get("verb") == "morte")
     resurrections = sum(1 for r in rows if r.get("verb") == "resurrezione")
-    denom = births + deaths + resurrections
+    executions = sum(1 for r in rows if r.get("verb") == "esecuzione")
+    denom = births + deaths + resurrections + executions
     vitality = round(births / denom, 4) if denom else None
     union = set(y) | set(t)
     continuity = round(len(set(y) & set(t)) / len(union), 4) if union else None
+    # R161 — THE EXECUTION: of the condemned pool, how many actually left the
+    # world's rows (nomi_spariti / nomi_condannati — the tribunal's word made
+    # arithmetic). A ratio that stays 0/4 forever means E4 is a comment, not a
+    # selection; None with an empty pool is the honest silence.
+    still_condemned = dead_pool & set(t)
+    gone_condemned = dead_pool - set(t)
+    execution = (round(len(gone_condemned) / len(dead_pool), 4)
+                 if dead_pool else None)
     return {"rows": rows, "births": births, "deaths": deaths,
-            "resurrections": resurrections, "vitality": vitality,
-            "continuity": continuity}
+            "resurrections": resurrections, "executions": executions,
+            "vitality": vitality, "continuity": continuity,
+            "execution": execution, "condemned_pool": sorted(dead_pool),
+            "still_condemned": sorted(still_condemned)}
 
 
 
@@ -329,7 +354,7 @@ def belief_persistence(rows: list[dict]) -> dict:
             continue
         if verb in ("nascita", "resurrezione"):
             born[fam] = stamp
-        elif verb == "morte" and fam in born:
+        elif verb in ("morte", "esecuzione") and fam in born:
             origin = born.pop(fam)
             try:
                 t0 = _parse_ts(origin)

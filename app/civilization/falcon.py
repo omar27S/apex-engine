@@ -588,7 +588,12 @@ def fire_siren(state: dict, siren: dict, *, ts: str = "") -> dict:
     del state["sirens"][:-200]
     state.setdefault("interbrain", []).append(
         {"author": "falcon", "idea": "SIRENA: " + str(siren.get("reading", "")),
-         "kind": "discovery", "ts": ts, "status": "open"})
+         "kind": "discovery", "ts": ts, "status": "open",
+         # R163 — THE DIGESTION: born with its closing condition written —
+         # an idea without one is noise with good calligraphy.
+         "closes_on": ("a newer shift on the same subject, the field's "
+                       "verdict, or fourteen unanswered days (the silence "
+                       "is the verdict)")})
     return row
 
 

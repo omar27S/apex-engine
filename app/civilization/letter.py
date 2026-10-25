@@ -827,6 +827,15 @@ def build_morning_letter(report: dict, *, civilization: dict | None = None,
         if sent:
             L.append("  - messaggi per tipo: " +
                      ", ".join(f"{k} {v}" for k, v in sent.items()))
+        # R163 — THE DIGESTION: of the voices born, how many were closed to
+        # a verdict (measured, refused, superseded, or aged by silence) — an
+        # idea without a closing condition is noise with good calligraphy.
+        _dig = conv.get("digestion")
+        if _dig is not None:
+            L.append(f"  - digestione: {conv.get('digested_ideas', 0)} "
+                     f"digerita/e su {conv.get('ideas', 0)} voci "
+                     f"({_dig:.0%}) — un'idea senza condizione di chiusura "
+                     "e' rumore con buona calligrafia")
         q = conv.get("questions")
         ans = conv.get("answered")
         if q is not None:

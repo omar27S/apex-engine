@@ -530,6 +530,80 @@ def _refused_ideas(state: dict) -> list[dict]:
             if r.get("idea")]
 
 
+DIGESTION_MAX_AGE_DAYS = 14  # R163 — a voice heard and never answered
+
+
+def _close_superseded(interbrain: list[dict]) -> int:
+    """R163 — SUPERSESSION: a regime discovery lives until the world moves again.
+
+    An ``IL MONDO CAMBIA: {pair}: ...`` voice is closed by any NEWER voice on
+    the same pair — the shift's life is the voice's life. Pure: the newest
+    voice per pair stays open; the older ones complete with the cause named.
+    """
+    newest: dict[str, str] = {}
+    for node in interbrain or []:
+        idea = str(node.get("idea") or "")
+        if node.get("kind") != "discovery" or not idea.startswith("IL MONDO CAMBIA: "):
+            continue
+        pair = idea[len("IL MONDO CAMBIA: "):].split(":", 1)[0].strip()
+        stamp = str(node.get("ts") or "")
+        if not pair or not stamp:
+            continue
+        if pair not in newest or stamp > newest[pair]:
+            newest[pair] = stamp
+    closed = 0
+    for node in interbrain or []:
+        if node.get("status") != "open":
+            continue
+        idea = str(node.get("idea") or "")
+        if node.get("kind") != "discovery" or not idea.startswith("IL MONDO CAMBIA: "):
+            continue
+        pair = idea[len("IL MONDO CAMBIA: "):].split(":", 1)[0].strip()
+        stamp = str(node.get("ts") or "")
+        if pair and stamp and newest.get(pair) and stamp < newest[pair]:
+            node["status"] = "complete"
+            node["completed_by"] = "the world"
+            node["completion"] = ("superseded — the world moved again "
+                                  "(a shift's voice lives until the next shift)")
+            closed += 1
+    return closed
+
+
+def _close_aged(interbrain: list[dict], *, now: str = "") -> int:
+    """R163 — AGE: a voice heard and never answered closes by silence.
+
+    ``DIGESTION_MAX_AGE_DAYS`` unanswered days complete a voice with the
+    honest verdict of silence — completed by time itself, never a fabricated
+    adoption. A voice with no ts never ages (unmeasured, never guessed).
+    """
+    from datetime import datetime, timezone
+
+    def _parse(v: str):
+        try:
+            return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    now_dt = _parse(now) if str(now or "").strip() else datetime.now(timezone.utc)
+    if now_dt is None:
+        return 0
+    closed = 0
+    for node in interbrain or []:
+        if node.get("status") != "open":
+            continue
+        born = _parse(str(node.get("ts") or ""))
+        if born is None:
+            continue
+        if (now_dt - born).total_seconds() > DIGESTION_MAX_AGE_DAYS * 86400:
+            node["status"] = "complete"
+            node["completed_by"] = "time"
+            node["completion"] = (f"aged — heard, never answered for "
+                                  f"{DIGESTION_MAX_AGE_DAYS} days; the silence "
+                                  "is the verdict")
+            closed += 1
+    return closed
+
+
 def _digest_interbrain(interbrain: list[dict], *, settles: list[dict],
                        refusals: list[dict]) -> dict:
     """R153 — THE DIGESTION: close the interbrain's measured ideas.
@@ -563,9 +637,16 @@ def _digest_interbrain(interbrain: list[dict], *, settles: list[dict],
         node["completed_by"] = "council"
         node["completion"] = note
         closed += 1
-    return {"closed_now": closed,
-            "open_now": sum(1 for n in (interbrain or [])
-                            if n.get("status") == "open")}
+    # R163 — THE DIGESTION: an idea without a closing condition is noise
+    # with good calligraphy (the Dragon's demand: every idea is BORN with
+    # its condition written). Two honest closes that need no Council's hand:
+    closed += _close_superseded(interbrain)
+    closed += _close_aged(interbrain)
+    open_now = sum(1 for n in (interbrain or []) if n.get("status") == "open")
+    total = len(interbrain or [])
+    digestion = (round((total - open_now) / total, 4) if total else None)
+    return {"closed_now": closed, "open_now": open_now, "total": total,
+            "digestion": digestion}
 
 
 def _seed_ideas(state: dict, *, curiosity_map: dict, self_model: dict) -> None:
@@ -1833,6 +1914,14 @@ def run_cycle(store_state: dict, *, night_report: dict | None = None,
 
     # 4. the network speaks: broadcast the decisions, ask the open questions.
     for d in session["decisions"]:
+        # R164 — THE QUIET ROOM KEEPS ITS BUDGET: a standing CEO order rides
+        # the sealed minutes (the ledger) every cycle, but it is not the room's
+        # chatter — re-broadcasting it every meeting ate the quiet budget
+        # forever (R152's doctrine applied to the decisions themselves: a
+        # house with N standing orders could never dream, no matter how still
+        # it stood). The register announces a standing order ONCE (4b' below).
+        if d.get("source") == "ceo":
+            continue
         network.record_exchange(store_state["bus"], sender="council",
                                 kind="decision", body=f"{d['kind']}: {d['what']}")
     for b in session["bursts"]:

@@ -355,6 +355,34 @@ CEO_DIRECTIVES: tuple[dict, ...] = (
                             "Pareto front's corners fill with evidence, not guesses"),
         "extra": {"source": "ceo", "realm": "pareto_space", "bounded": True},
     },
+    {
+        # R164 — THE FOUNDING WAVE: the CEO's answer to the Sage's ultimatum
+        # (the letter of 2026-10-25): a world at population zero with its
+        # only family condemned cannot generate its own next cycle — the
+        # CEO decides RESOURCES, not technique: the basin OPENS.
+        "kind": "authorize",
+        "what": ("authorize the founding wave: repopulate the empty world "
+                 "with fresh founders across the under-weighted families"),
+        "why": ("the Sage's ultimatum stands: the world model is empty "
+                "(0 living families, the last one condemned by E4) and 120 "
+                "cycles have turned on a dead world — a civilization that "
+                "cannot generate its next cycle is a dead world wearing a "
+                "pulse; the CEO chooses life: the basin opens"),
+        "evidence": ("CEO directive (the letter of 2026-10-25): families "
+                     "[], census 0 nascite / 3 morti / 0 resurrezioni, "
+                     "vitality 0.00, 120 cycles witnessed-4"),
+        "expected_effect": ("fresh founders spread across the under-weighted "
+                            "families of the taxonomy; every newborn is "
+                            "judged by the SAME law that killed its elders "
+                            "— the friction-proportional cure course, then "
+                            "the E4 retirement by data (the criteria written "
+                            "BEFORE the wave, never after it)"),
+        "extra": {"source": "ceo", "basin": True, "bounded": True,
+                  "budget": "the standing burst capacity (one founding "
+                            "wave per night until the world carries three "
+                            "living families)",
+                  "criteria": "R147's cure course + E4 retirement by data"},
+    },
 )
 
 

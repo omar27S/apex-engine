@@ -18,7 +18,7 @@ import hashlib
 
 from app.civilization import career as career_mod
 from app.civilization import council as council_mod  # noqa: E402
-from app.civilization import gaze, mind, one_brain, playground
+from app.civilization import circadian, gaze, mind, one_brain, playground
 from app.civilization.sage import _now  # R159 — the cycle owns a clock
 
 __all__ = ["run_one_brain", "minds_from_report", "TITANIUM_FLOOR"]
@@ -210,6 +210,18 @@ def _market_model(night_report: dict, *, version: int, ts: str,
     regimes: dict = {}
     if isinstance(hawk, dict) and isinstance(hawk.get("regimes"), dict):
         regimes = {str(k): v for k, v in hawk["regimes"].items() if v}
+    # R160 — THE REGIME'S VOICE: the falcon's live per-pair census is the REAL
+    # regime measurement (the Dragon's sixth wound: "the civilization knows how
+    # much a family weighs, but not WHEN it exists"). The wire once ended at the
+    # hawk alone — an organ that carries ticks, not regimes — so the axis read
+    # empty every night while the falcon measured the world alone. The report is
+    # the sealed artifact: the census is read from IT (pure, deterministic); the
+    # falcon's rows win the label, the hawk's map (if ever measured) keeps its say.
+    _falcon = ((night_report.get("civilization") or {}).get("falcon") or {})
+    _detail = _falcon.get("regimes_detail") or {}
+    for _row in _detail.get("rows") or []:
+        if isinstance(_row, dict) and _row.get("pair") and _row.get("regime"):
+            regimes[str(_row["pair"])] = str(_row["regime"])
     flows = {str(r.get("family")): (float(r.get("adv_net_r"))
              if isinstance(r.get("adv_net_r"), (int, float)) else None)
              for r in rows if r.get("family")}
@@ -218,6 +230,12 @@ def _market_model(night_report: dict, *, version: int, ts: str,
         sessions["hawk_tick"] = str(hawk.get("reading"))
     if isinstance(futures, dict) and futures.get("reading"):
         sessions["futures_context"] = str(futures.get("reading"))
+    # R160 — THE REGIME'S VOICE: the session axis carries the day's own phase
+    # (the circadian breath) — a world measured in asian_calm is not a world
+    # measured at the NY peak, and the register may no longer confuse them.
+    _phase = circadian.phase_at(ts)
+    if _phase:
+        sessions["day_phase"] = _phase
     m = one_brain.market_model(pairs=pairs, flows=flows, regimes=regimes,
                                sessions=sessions, resilience=resilience,
                                version=version, ts=ts)
@@ -230,6 +248,20 @@ def _market_model(night_report: dict, *, version: int, ts: str,
         if condemned_running:
             belief += (f" — {len(condemned_running)} condannata/e (E4): "
                        f"{', '.join(condemned_running)}")
+        # R160 — THE REGIME'S VOICE: the belief names its context — WHICH world
+        # measured these families (the live census) and WHICH part of the day
+        # (the phase). A belief that hides its context is a verdict without a
+        # court: the world it names is never the world in the abstract.
+        if regimes:
+            _counts: dict = {}
+            for _label in regimes.values():
+                _k = str(_label)
+                _counts[_k] = _counts.get(_k, 0) + 1
+            belief += (" — i regimi: "
+                       + ", ".join(f"{k} {v}" for k, v in sorted(_counts.items()))
+                       + f" su {len(regimes)} pair")
+        if sessions.get("day_phase"):
+            belief += f" (fase {sessions['day_phase']})"
         m["belief"] = belief
         m["condemned"] = condemned_running
     if sessions:

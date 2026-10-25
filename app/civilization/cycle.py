@@ -437,6 +437,31 @@ def _performance(night_report: dict, cov: dict) -> dict:
     return perf
 
 
+def _regime_census(night_report: dict) -> dict:
+    """R160 — THE REGIME'S VOICE: the falcon's live census, as the Council's context.
+
+    Pure from the sealed report: per-regime pair counts, how many pairs the world
+    measured, and the dead share. A world 83% dead is a different court than a
+    world 83% trending — the verdicts are now sealed WITH their context, so the
+    register can tell a condemnation measured in a paused world from one measured
+    in a living one. No falcon in the report: an honest empty dict (never a
+    fabricated census).
+    """
+    rows = (((night_report.get("civilization") or {}).get("falcon") or {})
+            .get("regimes_detail") or {}).get("rows") or []
+    counts: dict[str, int] = {}
+    for r in rows:
+        if isinstance(r, dict) and r.get("regime"):
+            k = str(r["regime"])
+            counts[k] = counts.get(k, 0) + 1
+    if not counts:
+        return {}
+    measured = sum(counts.values())
+    dead = counts.get("dead", 0)
+    return {"counts": counts, "pairs_measured": measured,
+            "dead_share": round(dead / measured, 4) if measured else None}
+
+
 def world_from(night_report: dict, powerups: dict, state: dict,
                *, capacity_trials: int | None = None) -> dict:
     """Assemble the WORLD snapshot the Council deliberates over (pure)."""
@@ -450,6 +475,9 @@ def world_from(night_report: dict, powerups: dict, state: dict,
     return {
         "realm_coverage": cov,
         "family_health": _family_health(night_report),
+        # R160 — THE REGIME'S VOICE: the Council deliberates WITH the world's
+        # live regime census — the court's context rides the agenda itself.
+        "regime_census": _regime_census(night_report),
         # R147 — THE HONEST MIRROR: the Council deliberates WITH its own memory —
         # how many cures each family already received (the course, E4's judge)
         # and which ideas the One Brain's field already refused (the honored veto).

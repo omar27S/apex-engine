@@ -1467,6 +1467,21 @@ def one_brain_lines(civ: dict | None) -> list[str]:
     change = ob.get("model_change") or {}
     L.append("**Il modello del mondo.**")
     L.append(f"  - v{model.get('version')}: {model.get('belief') or 'non misurato'}")
+    # R160 — THE REGIME'S VOICE: the senses have their line — the regimes axis
+    # (pair -> regime, the falcon's live census) and the day's own phase. Spoken
+    # when measured, silent when not: an empty axis was never a reading.
+    _regs = model.get("regimes") or {}
+    if isinstance(_regs, dict) and _regs:
+        _cnt: dict = {}
+        for _v in _regs.values():
+            _k = str(_v)
+            _cnt[_k] = _cnt.get(_k, 0) + 1
+        L.append("  - i regimi misurati dal falco: "
+                 + ", ".join(f"{k} {v}" for k, v in sorted(_cnt.items()))
+                 + f" su {len(_regs)} pair")
+    _ses = model.get("sessions") or {}
+    if isinstance(_ses, dict) and _ses.get("day_phase"):
+        L.append(f"  - la fase del giorno: {_ses.get('day_phase')}")
     L.append(f"  - {change.get('reading')}")
     L.append("")
     # THE BRIDGE: la dispensa dell'evoluzione -- il cuore e la mente si parlano.

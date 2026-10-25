@@ -120,6 +120,28 @@ def course_for_failures(fails: int) -> int:
                                 CURE_COURSE + fails // FRICTION_PER_CURE))
 
 
+def _regime_context(world: dict) -> str:
+    """R160 — THE REGIME'S VOICE: the census as the verdict's context (or '').
+
+    A verdict sealed without its court is a number pretending to be a judgment:
+    181 failures counted in a world where 15 of 18 pairs were dead is a different
+    case than the same 181 in a living one. The context rides the EVIDENCE (the
+    sealed part of the decision), so the Dragon can weigh the court, not just the
+    count. No census measured: an honest empty string (the verdict stands as it
+    always stood).
+    """
+    c = world.get("regime_census") or {}
+    if not isinstance(c, dict):
+        return ""
+    measured = int(c.get("pairs_measured") or 0)
+    dead = int((c.get("counts") or {}).get("dead") or 0)
+    if not measured:
+        return ""
+    share = c.get("dead_share")
+    pct = f" ({share:.0%})" if isinstance(share, (int, float)) else ""
+    return f", world_context: {dead}/{measured} pair dead{pct}"
+
+
 def _cure_decisions(world: dict) -> list[dict]:
     """Cure the sick — with a COURSE, then retire them (E4). R147.
 
@@ -132,6 +154,9 @@ def _cure_decisions(world: dict) -> list[dict]:
     """
     out: list[dict] = []
     cures = world.get("family_cures") or {}
+    # R160 — THE REGIME'S VOICE: every E4 verdict is sealed WITH its context —
+    # the court that judged it (the world's live regime census).
+    ctx = _regime_context(world)
     for family, h in sorted((world.get("family_health") or {}).items()):
         fails = int(h.get("failures", 0))
         survivors = int(h.get("survivors", 0))
@@ -152,7 +177,8 @@ def _cure_decisions(world: dict) -> list[dict]:
                      "the treatment "
                      f"changes with the patient, and a course that ends without a "
                      f"survivor retires the family (E4), it never restarts"),
-                evidence=f"failures={fails}, survivors={survivors}, course={n + 1}/{course}",
+                evidence=(f"failures={fails}, survivors={survivors}, "
+                          f"course={n + 1}/{course}{ctx}"),
                 expected_effect="a targeted treatment burst measures whether this "
                                 "family can still produce a survivor",
                 extra={"family": family, "course": n + 1, "trials": MIN_BURST_TRIALS}))
@@ -166,7 +192,8 @@ def _cure_decisions(world: dict) -> list[dict]:
                      f"weak by data and give the seat to a king-child in light "
                      f"mutation; reanimating a certified death is not research, it "
                      f"is the {fails + 1}st defeat disguised as hope"),
-                evidence=f"failures={fails}, survivors={survivors}, cures_tried={n}",
+                evidence=(f"failures={fails}, survivors={survivors}, "
+                          f"cures_tried={n}{ctx}"),
                 expected_effect="the freed seat goes to a child of the King (light "
                                 "mutation) — the dead become evidence, not a patient",
                 extra={"family": family, "cures_tried": n, "e4": True}))
